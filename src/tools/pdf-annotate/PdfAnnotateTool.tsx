@@ -2616,7 +2616,7 @@ export default function PdfAnnotateTool() {
     }
 
     // ── Click-to-select (only for non-drawing tools) ──
-    if (!DRAW_TYPES.has(activeTool) && activeTool !== 'eraser' && activeTool !== 'highlighter' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough') {
+    if (!DRAW_TYPES.has(activeTool) && activeTool !== 'eraser' && activeTool !== 'highlighter') {
       const hitAny = findAnnotationAt(pt)
       if (hitAny) {
         setSelectedAnnId(hitAny.id)
