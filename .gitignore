@@ -30,3 +30,10 @@ npm-debug.log*
 # Claude / internal docs
 CLAUDE.md
 React-Audit.md
+
+# QA / Testing
+QA-Audit.md
+test-results/
+playwright-report/
+e2e/
+playwright.config.ts

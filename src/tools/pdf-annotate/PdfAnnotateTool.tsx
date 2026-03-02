@@ -11,19 +11,19 @@ import {
   Download, RotateCcw, RotateCw, Undo2, Redo2,
   Pencil, Highlighter, Square, Circle, ArrowUpRight, Minus, Type, Eraser,
   ZoomIn, ZoomOut, Maximize, Cloud, ChevronDown, ChevronLeft, ChevronRight, PanelLeft,
-  MessageSquare, X, Ruler, TextSelect,
+  MessageSquare, X, Ruler, TextSelect, MousePointer2, Strikethrough, Paintbrush,
   Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight,
 } from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────
 
-type ToolType = 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight'
+type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight'
 
 interface Point { x: number; y: number }
 
 interface Annotation {
   id: string
-  type: Exclude<ToolType, 'eraser' | 'measure' | 'textHighlight'>
+  type: Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight'>
   points: Point[]
   color: string
   strokeWidth: number
@@ -34,6 +34,9 @@ interface Annotation {
   bold?: boolean
   italic?: boolean
   underline?: boolean
+  strikethrough?: boolean
+  backgroundColor?: string
+  lineHeight?: number
   textAlign?: 'left' | 'center' | 'right'
   width?: number   // textbox width (doc space) — text & callout
   height?: number  // textbox height (doc space) — text & callout
@@ -134,7 +137,7 @@ function resolvePdfFont(ff: string, bold: boolean, italic: boolean): StandardFon
 }
 
 const CURSOR_MAP: Record<ToolType, string> = {
-  pencil: 'crosshair', highlighter: 'crosshair', line: 'crosshair',
+  select: 'default', pencil: 'crosshair', highlighter: 'crosshair', line: 'crosshair',
   arrow: 'crosshair', rectangle: 'crosshair', circle: 'crosshair',
   cloud: 'crosshair', text: 'text', eraser: 'none',
   callout: 'crosshair', measure: 'crosshair', textHighlight: 'text',
@@ -912,10 +915,22 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
       ctx.textBaseline = 'top'
       ctx.globalAlpha = ann.opacity
       const align = ann.textAlign || 'left'
+      const textLH = ann.lineHeight || 1.3
+
+      // Background highlight
+      if (ann.backgroundColor && ann.width && ann.height) {
+        ctx.save()
+        ctx.globalAlpha = 0.3
+        ctx.fillStyle = ann.backgroundColor
+        ctx.fillRect(pts[0].x * scale, pts[0].y * scale, ann.width * scale, ann.height * scale)
+        ctx.restore()
+        ctx.globalAlpha = ann.opacity
+        ctx.fillStyle = ann.color
+      }
 
       if (ann.width) {
         const lines = wrapText(ann.text, ann.width, ann.fontSize || 16, ann.bold, (t: string) => ctx.measureText(t).width / scale)
-        const lineH = (ann.fontSize || 16) * 1.3
+        const lineH = (ann.fontSize || 16) * textLH
         for (let i = 0; i < lines.length; i++) {
           const lineY = (pts[0].y + lineH * i) * scale
           let lineX = pts[0].x * scale
@@ -932,11 +947,21 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
             ctx.strokeStyle = ann.color
             ctx.stroke()
           }
+          if (ann.strikethrough) {
+            const tw = ctx.measureText(lines[i]).width
+            const sy = lineY + fs * 0.4
+            ctx.beginPath()
+            ctx.moveTo(lineX, sy)
+            ctx.lineTo(lineX + tw, sy)
+            ctx.lineWidth = Math.max(1, fs * 0.06)
+            ctx.strokeStyle = ann.color
+            ctx.stroke()
+          }
         }
       } else {
         const lines = ann.text.split('\n')
         for (let i = 0; i < lines.length; i++) {
-          const lineY = (pts[0].y + (ann.fontSize || 16) * 1.3 * i) * scale
+          const lineY = (pts[0].y + (ann.fontSize || 16) * textLH * i) * scale
           ctx.fillText(lines[i], pts[0].x * scale, lineY)
           if (ann.underline) {
             const tw = ctx.measureText(lines[i]).width
@@ -944,6 +969,16 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
             ctx.beginPath()
             ctx.moveTo(pts[0].x * scale, uy)
             ctx.lineTo(pts[0].x * scale + tw, uy)
+            ctx.lineWidth = Math.max(1, fs * 0.06)
+            ctx.strokeStyle = ann.color
+            ctx.stroke()
+          }
+          if (ann.strikethrough) {
+            const tw = ctx.measureText(lines[i]).width
+            const sy = lineY + fs * 0.4
+            ctx.beginPath()
+            ctx.moveTo(pts[0].x * scale, sy)
+            ctx.lineTo(pts[0].x * scale + tw, sy)
             ctx.lineWidth = Math.max(1, fs * 0.06)
             ctx.strokeStyle = ann.color
             ctx.stroke()
@@ -976,8 +1011,9 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
         ctx.fillStyle = calloutColor
         ctx.textBaseline = 'top'
         const cAlign = ann.textAlign || 'left'
+        const calloutLH = ann.lineHeight || 1.3
         const lines = wrapText(ann.text, ann.width - 8, ann.fontSize || 14, ann.bold, (t: string) => ctx.measureText(t).width / scale)
-        const lineH = (ann.fontSize || 14) * 1.3
+        const lineH = (ann.fontSize || 14) * calloutLH
         const padding = 4 * scale
         for (let i = 0; i < lines.length; i++) {
           const lineY = by + padding + lineH * i * scale
@@ -992,6 +1028,16 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
             ctx.beginPath()
             ctx.moveTo(lineX, uy)
             ctx.lineTo(lineX + tw, uy)
+            ctx.lineWidth = Math.max(1, cfs * 0.06)
+            ctx.strokeStyle = calloutColor
+            ctx.stroke()
+          }
+          if (ann.strikethrough) {
+            const tw = ctx.measureText(lines[i]).width
+            const sy = lineY + cfs * 0.4
+            ctx.beginPath()
+            ctx.moveTo(lineX, sy)
+            ctx.lineTo(lineX + tw, sy)
             ctx.lineWidth = Math.max(1, cfs * 0.06)
             ctx.strokeStyle = calloutColor
             ctx.stroke()
@@ -1147,7 +1193,7 @@ export default function PdfAnnotateTool() {
   // State
   const [pdfFile, setPdfFile] = useState<PDFFile | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
-  const [activeTool, setActiveTool] = useState<ToolType>('pencil')
+  const [activeTool, setActiveTool] = useState<ToolType>('select')
   const [color, setColor] = useState('#F47B20')
   const [strokeWidth, setStrokeWidth] = useState(2)
   const [opacity, setOpacity] = useState(100)
@@ -1163,6 +1209,9 @@ export default function PdfAnnotateTool() {
   const [bold, setBold] = useState(false)
   const [italic, setItalic] = useState(false)
   const [underline, setUnderline] = useState(false)
+  const [strikethrough, setStrikethrough] = useState(false)
+  const [textBgColor, setTextBgColor] = useState<string | null>(null)
+  const [lineSpacing, setLineSpacing] = useState(1.3)
   const [textAlign, setTextAlign] = useState<'left' | 'center' | 'right'>('left')
   const [canvasCursor, setCanvasCursor] = useState<string | null>(null)
   const clipboardRef = useRef<Annotation | null>(null)
@@ -1192,6 +1241,13 @@ export default function PdfAnnotateTool() {
   const [editingTextId, setEditingTextId] = useState<string | null>(null)
   const [editingTextValue, setEditingTextValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Tracks whether the textarea was committed via Escape key so the blur handler
+  // doesn't run commitTextEditing a second time (which would add a duplicate history step)
+  const escapeCommittedRef = useRef(false)
+  // Manual double-click detection: pointerdown events have e.detail=0 in Chromium
+  // (unlike mousedown), so we must track click timestamps ourselves.
+  const dblClickRef = useRef<{ time: number; pt: Point }>({ time: 0, pt: { x: 0, y: 0 } })
   const textDragRef = useRef<{
     mode: 'move' | HandleId
     startPt: Point
@@ -1199,6 +1255,9 @@ export default function PdfAnnotateTool() {
     origWidth: number
     origHeight: number
     origArrows?: Point[]
+  } | null>(null)
+  const generalDragRef = useRef<{
+    annId: string; startPt: Point; origPoints: Point[]
   } | null>(null)
 
   // Callout arrow drag
@@ -1346,7 +1405,7 @@ export default function PdfAnnotateTool() {
     for (const frag of mods.added) drawAnnotation(ctx, frag, RENDER_SCALE)
 
     // In-progress stroke
-    if (isDrawingRef.current && activeTool !== 'eraser' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'cloud' && activeTool !== 'measure' && activeTool !== 'textHighlight') {
+    if (isDrawingRef.current && activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'cloud' && activeTool !== 'measure' && activeTool !== 'textHighlight') {
       const pts = currentPtsRef.current
       if (pts.length > 0) {
         const inProgress: Annotation = {
@@ -1509,31 +1568,39 @@ export default function PdfAnnotateTool() {
   }, [])
 
   const commitAnnotation = useCallback((ann: Annotation) => {
-    setAnnotations(prev => {
-      const next = { ...prev, [currentPage]: [...(prev[currentPage] || []), ann] }
-      pushHistory(next)
-      return next
-    })
-  }, [currentPage, pushHistory])
+    // Compute next from current annotations state (not functional updater) so that
+    // pushHistory can be called OUTSIDE setAnnotations. React StrictMode double-invokes
+    // state updaters — calling pushHistory inside would push twice and corrupt undo history.
+    const next = { ...annotations, [currentPage]: [...(annotations[currentPage] || []), ann] }
+    setAnnotations(next)
+    pushHistory(next)
+  }, [currentPage, annotations, pushHistory])
 
   const updateAnnotation = useCallback((id: string, update: Partial<Annotation>) => {
-    setAnnotations(prev => {
-      const next = {
-        ...prev,
-        [currentPage]: (prev[currentPage] || []).map(a => a.id === id ? { ...a, ...update } : a),
-      }
-      pushHistory(next)
-      return next
-    })
-  }, [currentPage, pushHistory])
+    // Same rationale as commitAnnotation: pushHistory outside to avoid StrictMode double-invoke.
+    const next = {
+      ...annotations,
+      [currentPage]: (annotations[currentPage] || []).map(a => a.id === id ? { ...a, ...update } : a),
+    }
+    setAnnotations(next)
+    pushHistory(next)
+  }, [currentPage, annotations, pushHistory])
+
+  // Updates an annotation without adding a history step — used for transient
+  // changes during editing (e.g. auto-grow height) that should not be undoable.
+  const updateAnnotationSilent = useCallback((id: string, update: Partial<Annotation>) => {
+    setAnnotations(prev => ({
+      ...prev,
+      [currentPage]: (prev[currentPage] || []).map(a => a.id === id ? { ...a, ...update } : a),
+    }))
+  }, [currentPage])
 
   const removeAnnotation = useCallback((id: string) => {
-    setAnnotations(prev => {
-      const next = { ...prev, [currentPage]: (prev[currentPage] || []).filter(a => a.id !== id) }
-      pushHistory(next)
-      return next
-    })
-  }, [currentPage, pushHistory])
+    // Same rationale as commitAnnotation: pushHistory outside to avoid StrictMode double-invoke.
+    const next = { ...annotations, [currentPage]: (annotations[currentPage] || []).filter(a => a.id !== id) }
+    setAnnotations(next)
+    pushHistory(next)
+  }, [currentPage, annotations, pushHistory])
 
   const undo = useCallback(() => {
     if (historyIdxRef.current <= 0) return
@@ -1575,6 +1642,11 @@ export default function PdfAnnotateTool() {
   }, [editingTextId, commitTextEditing])
 
   const enterEditMode = useCallback((annId: string) => {
+    // Clear pending blur timeout to prevent race condition
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current)
+      blurTimeoutRef.current = null
+    }
     const ann = (annotations[currentPage] || []).find(a => a.id === annId)
     if (!ann || (ann.type !== 'text' && ann.type !== 'callout')) return
     setEditingTextId(annId)
@@ -1584,7 +1656,12 @@ export default function PdfAnnotateTool() {
     setBold(ann.bold || false)
     setItalic(ann.italic || false)
     setUnderline(ann.underline || false)
+    setStrikethrough(ann.strikethrough || false)
+    setTextBgColor(ann.backgroundColor || null)
+    setLineSpacing(ann.lineHeight || 1.3)
     setTextAlign(ann.textAlign || 'left')
+    // Auto-focus textarea
+    requestAnimationFrame(() => textareaRef.current?.focus())
   }, [annotations, currentPage])
 
   // ── Fit to window ──────────────────────────────────
@@ -1708,6 +1785,20 @@ export default function PdfAnnotateTool() {
           if (k === 'b') { const v = !ann.bold; setBold(v); updateAnnotation(editingTextId, { bold: v }) }
           if (k === 'i') { const v = !ann.italic; setItalic(v); updateAnnotation(editingTextId, { italic: v }) }
           if (k === 'u') { const v = !ann.underline; setUnderline(v); updateAnnotation(editingTextId, { underline: v }) }
+          requestAnimationFrame(() => {
+            textareaRef.current?.focus()
+            textareaRef.current?.setSelectionRange(selStart, selEnd)
+          })
+          return
+        }
+        if (k === 'x' && e.shiftKey) {
+          e.preventDefault()
+          const ann = (annotations[currentPage] || []).find(a => a.id === editingTextId)
+          if (!ann) return
+          const ta = textareaRef.current
+          const selStart = ta?.selectionStart ?? 0
+          const selEnd = ta?.selectionEnd ?? 0
+          const v = !ann.strikethrough; setStrikethrough(v); updateAnnotation(editingTextId, { strikethrough: v })
           requestAnimationFrame(() => {
             textareaRef.current?.focus()
             textareaRef.current?.setSelectionRange(selStart, selEnd)
@@ -1890,7 +1981,7 @@ export default function PdfAnnotateTool() {
       // ── Single-letter tool switching (no modifier) ──
       if (!mod && !e.shiftKey && !e.altKey) {
         const toolMap: Record<string, ToolType> = {
-          p: 'pencil', l: 'line', a: 'arrow', r: 'rectangle', c: 'circle', k: 'cloud',
+          s: 'select', p: 'pencil', l: 'line', a: 'arrow', r: 'rectangle', c: 'circle', k: 'cloud',
           t: 'text', o: 'callout', e: 'eraser', h: 'highlighter', m: 'measure',
         }
         const mapped = toolMap[e.key.toLowerCase()]
@@ -1933,6 +2024,7 @@ export default function PdfAnnotateTool() {
     currentPtsRef.current = []
     eraserModsRef.current = { removed: new Set(), added: [] }
     calloutArrowDragRef.current = null
+    generalDragRef.current = null
     cloudPreviewRef.current = null
     cloudLastClickRef.current = { time: 0, pt: { x: 0, y: 0 } }
     measureStartRef.current = null
@@ -2024,6 +2116,12 @@ export default function PdfAnnotateTool() {
     e.currentTarget.setPointerCapture(e.pointerId)
     const pt = getPoint(e)
 
+    // Manual double-click detection (pointerdown.detail is always 0 in Chromium)
+    const now = Date.now()
+    const dblLast = dblClickRef.current
+    const isDoubleClick = (now - dblLast.time) < 400 && Math.hypot(pt.x - dblLast.pt.x, pt.y - dblLast.pt.y) < 20
+    dblClickRef.current = { time: now, pt }
+
     // ── Measure tool: click-click placement ──
     if (activeTool === 'measure') {
       // First: check if clicking an existing measurement's label → open calibration
@@ -2094,6 +2192,60 @@ export default function PdfAnnotateTool() {
         measurePreviewRef.current = pt
         setSelectedMeasureId(null)
       }
+      return
+    }
+
+    // ── Select tool ──
+    if (activeTool === 'select') {
+      // If editing text, commit first
+      if (editingTextId) commitTextEditing()
+
+      // Check resize handles on selected text/callout
+      if (selectedAnnId) {
+        const ann = getAnnotation(selectedAnnId)
+        if (ann && (ann.type === 'text' || ann.type === 'callout') && ann.width && ann.height) {
+          const handleThreshold = HANDLE_SIZE / zoom + 4
+          const handle = hitTestHandle(pt, ann, handleThreshold)
+          if (handle) {
+            isDrawingRef.current = true
+            textDragRef.current = {
+              mode: handle, startPt: pt,
+              origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
+              origArrows: ann.arrows ? [...ann.arrows] : undefined,
+            }
+            return
+          }
+        }
+      }
+
+      // Hit-test all annotations
+      const hitAnn = findAnnotationAt(pt)
+      if (hitAnn) {
+        setSelectedAnnId(hitAnn.id)
+        // Double-click text/callout -> edit mode
+        if ((hitAnn.type === 'text' || hitAnn.type === 'callout') && isDoubleClick) {
+          enterEditMode(hitAnn.id)
+        }
+        // Start move drag for text/callout
+        if ((hitAnn.type === 'text' || hitAnn.type === 'callout') && hitAnn.width && hitAnn.height) {
+          isDrawingRef.current = true
+          textDragRef.current = {
+            mode: 'move', startPt: pt,
+            origPoints: [...hitAnn.points], origWidth: hitAnn.width, origHeight: hitAnn.height,
+            origArrows: hitAnn.arrows ? [...hitAnn.arrows] : undefined,
+          }
+        } else if (hitAnn.type !== 'text' && hitAnn.type !== 'callout') {
+          // For non-text annotations, start general move drag
+          isDrawingRef.current = true
+          generalDragRef.current = {
+            annId: hitAnn.id, startPt: pt, origPoints: [...hitAnn.points],
+          }
+        }
+        return
+      }
+
+      // Click empty space -> deselect
+      setSelectedAnnId(null)
       return
     }
 
@@ -2181,7 +2333,7 @@ export default function PdfAnnotateTool() {
           enterEditMode(hitCallout.id)
         } else {
           setSelectedAnnId(hitCallout.id)
-          if (e.detail >= 2) enterEditMode(hitCallout.id)
+          if (isDoubleClick) enterEditMode(hitCallout.id)
           if (hitCallout.width && hitCallout.height) {
             isDrawingRef.current = true
             textDragRef.current = {
@@ -2244,7 +2396,7 @@ export default function PdfAnnotateTool() {
           // Select it
           setSelectedAnnId(hitAnn.id)
           // Double-click to edit
-          if (e.detail >= 2) {
+          if (isDoubleClick) {
             enterEditMode(hitAnn.id)
           }
           // Start move drag
@@ -2283,7 +2435,7 @@ export default function PdfAnnotateTool() {
       if (hitAny) {
         setSelectedAnnId(hitAny.id)
         // Double-click text/callout → edit mode
-        if ((hitAny.type === 'text' || hitAny.type === 'callout') && e.detail >= 2) {
+        if ((hitAny.type === 'text' || hitAny.type === 'callout') && isDoubleClick) {
           enterEditMode(hitAny.id)
         }
         return
@@ -2374,8 +2526,74 @@ export default function PdfAnnotateTool() {
       setCanvasCursor(null)
     }
 
+    // ── Cursor tracking for select tool handles/annotations ──
+    if (!isDrawingRef.current && activeTool === 'select' && selectedAnnId) {
+      const hoverPt = getPoint(e)
+      const selAnn = (annotations[currentPage] || []).find(a => a.id === selectedAnnId)
+      if (selAnn) {
+        const handleThreshold = HANDLE_SIZE / zoom + 4
+        const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
+        if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
+        if (hitTest(hoverPt, selAnn, 4)) { setCanvasCursor('move'); return }
+      }
+      setCanvasCursor(null)
+    }
+
     if (!isDrawingRef.current) return
     const pt = getPoint(e)
+
+    // General drag (select tool: moving shapes)
+    if (generalDragRef.current) {
+      const drag = generalDragRef.current
+      const dx = pt.x - drag.startPt.x
+      const dy = pt.y - drag.startPt.y
+      const newPoints = drag.origPoints.map(p => ({ x: p.x + dx, y: p.y + dy }))
+      setAnnotations(prev => ({
+        ...prev,
+        [currentPage]: (prev[currentPage] || []).map(a =>
+          a.id === drag.annId ? { ...a, points: newPoints } : a
+        ),
+      }))
+      redraw()
+      return
+    }
+
+    // Select tool: text/callout move/resize via textDragRef
+    if (activeTool === 'select' && textDragRef.current) {
+      const drag = textDragRef.current
+      const dx = pt.x - drag.startPt.x
+      const dy = pt.y - drag.startPt.y
+      if (drag.mode === 'move') {
+        const movedArrows = drag.origArrows?.map(p => ({ x: p.x + dx, y: p.y + dy }))
+        setAnnotations(prev => ({
+          ...prev,
+          [currentPage]: (prev[currentPage] || []).map(a =>
+            a.id === selectedAnnId ? { ...a, points: [{ x: drag.origPoints[0].x + dx, y: drag.origPoints[0].y + dy }], ...(movedArrows ? { arrows: movedArrows } : {}) } : a
+          ),
+        }))
+      } else {
+        const { origPoints, origWidth, origHeight } = drag
+        let newX = origPoints[0].x, newY = origPoints[0].y
+        let newW = origWidth, newH = origHeight
+        switch (drag.mode) {
+          case 'se': newW = Math.max(40, origWidth + dx); newH = Math.max(20, origHeight + dy); break
+          case 'sw': newX = origPoints[0].x + dx; newW = Math.max(40, origWidth - dx); newH = Math.max(20, origHeight + dy); break
+          case 'ne': newW = Math.max(40, origWidth + dx); newY = origPoints[0].y + dy; newH = Math.max(20, origHeight - dy); break
+          case 'nw': newX = origPoints[0].x + dx; newY = origPoints[0].y + dy; newW = Math.max(40, origWidth - dx); newH = Math.max(20, origHeight - dy); break
+          case 'n': newY = origPoints[0].y + dy; newH = Math.max(20, origHeight - dy); break
+          case 's': newH = Math.max(20, origHeight + dy); break
+          case 'e': newW = Math.max(40, origWidth + dx); break
+          case 'w': newX = origPoints[0].x + dx; newW = Math.max(40, origWidth - dx); break
+        }
+        setAnnotations(prev => ({
+          ...prev,
+          [currentPage]: (prev[currentPage] || []).map(a =>
+            a.id === selectedAnnId ? { ...a, points: [{ x: newX, y: newY }], width: newW, height: newH } : a
+          ),
+        }))
+      }
+      return
+    }
 
     // Text highlight: update preview rects
     if (activeTool === 'textHighlight' && textHighlightStartRef.current) {
@@ -2589,6 +2807,23 @@ export default function PdfAnnotateTool() {
     if (!isDrawingRef.current) return
     isDrawingRef.current = false
 
+    // General drag (select tool: moving shapes)
+    if (generalDragRef.current) {
+      pushHistory(structuredClone(annotations))
+      generalDragRef.current = null
+      return
+    }
+
+    // Select tool: commit text/callout drag
+    if (activeTool === 'select') {
+      if (textDragRef.current) {
+        pushHistory(structuredClone(annotations))
+        textDragRef.current = null
+        return
+      }
+      return
+    }
+
     // Callout tool: finish arrow drag, move/resize, or create box
     if (activeTool === 'callout') {
       if (calloutArrowDragRef.current && selectedAnnId) {
@@ -2632,7 +2867,8 @@ export default function PdfAnnotateTool() {
           color, fontSize, fontFamily, strokeWidth: 1,
           opacity: 1,
           text: '', width: boxW, height: boxH, arrows: [],
-          bold, italic, underline, textAlign,
+          bold, italic, underline, strikethrough, textAlign,
+          backgroundColor: textBgColor || undefined, lineHeight: lineSpacing,
         }
         commitAnnotation(newAnn)
         setSelectedAnnId(newAnn.id)
@@ -2678,7 +2914,8 @@ export default function PdfAnnotateTool() {
           text: '',
           width: boxW,
           height: boxH,
-          bold, italic, underline, textAlign,
+          bold, italic, underline, strikethrough, textAlign,
+          backgroundColor: textBgColor || undefined, lineHeight: lineSpacing,
         }
         commitAnnotation(newAnn)
         setSelectedAnnId(newAnn.id)
@@ -2693,13 +2930,12 @@ export default function PdfAnnotateTool() {
     if (activeTool === 'eraser') {
       const mods = eraserModsRef.current
       if (mods.removed.size > 0 || mods.added.length > 0) {
-        setAnnotations(prev => {
-          const page = prev[currentPage] || []
-          const surviving = page.filter(a => !mods.removed.has(a.id))
-          const next = { ...prev, [currentPage]: [...surviving, ...mods.added] }
-          pushHistory(next)
-          return next
-        })
+        // Same rationale as commitAnnotation: pushHistory outside to avoid StrictMode double-invoke.
+        const page = annotations[currentPage] || []
+        const surviving = page.filter(a => !mods.removed.has(a.id))
+        const next = { ...annotations, [currentPage]: [...surviving, ...mods.added] }
+        setAnnotations(next)
+        pushHistory(next)
       }
       eraserModsRef.current = { removed: new Set(), added: [] }
       return
@@ -2737,7 +2973,7 @@ export default function PdfAnnotateTool() {
     const isHL = activeTool === 'highlighter'
     const ann: Annotation = {
       id: genId(),
-      type: activeTool as Exclude<ToolType, 'eraser' | 'measure' | 'textHighlight'>,
+      type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight'>,
       points: [...pts],
       color,
       strokeWidth: isHL ? strokeWidth * 3 : strokeWidth,
@@ -2903,14 +3139,14 @@ export default function PdfAnnotateTool() {
                   if (tAlign === 'center') xOff = (ann.width - tw) / 2
                   else if (tAlign === 'right') xOff = ann.width - tw
                 }
-                const linePt = toPC({ x: ann.points[0].x + xOff, y: ann.points[0].y + fs * 1.3 * i + fs })
+                const linePt = toPC({ x: ann.points[0].x + xOff, y: ann.points[0].y + fs * (ann.lineHeight || 1.3) * i + fs })
                 page.drawText(lines[i], {
                   x: linePt.x, y: linePt.y,
                   size: fs, font: pdfFont, color: c, opacity: ann.opacity,
                 })
                 if (ann.underline) {
                   const tw = pdfFont.widthOfTextAtSize(lines[i], fs)
-                  const ulY = ann.points[0].y + fs * 1.3 * i + fs + fs * 0.15
+                  const ulY = ann.points[0].y + fs * (ann.lineHeight || 1.3) * i + fs + fs * 0.15
                   const ulStart = toPC({ x: ann.points[0].x + xOff, y: ulY })
                   const ulEnd = toPC({ x: ann.points[0].x + xOff + tw, y: ulY })
                   page.drawLine({ start: ulStart, end: ulEnd, thickness: Math.max(0.5, fs * 0.05), color: c, opacity: ann.opacity })
@@ -2944,14 +3180,14 @@ export default function PdfAnnotateTool() {
                     if (cAlign === 'center') cxOff = 4 + (ann.width - 8 - ctw) / 2
                     else if (cAlign === 'right') cxOff = ann.width - 4 - ctw
                   }
-                  const lPt = toPC({ x: boxPt.x + cxOff, y: boxPt.y + 4 + cfs * 1.3 * i + cfs })
+                  const lPt = toPC({ x: boxPt.x + cxOff, y: boxPt.y + 4 + cfs * (ann.lineHeight || 1.3) * i + cfs })
                   page.drawText(cLines[i], {
                     x: lPt.x, y: lPt.y,
                     size: cfs, font: calloutFont, color: c, opacity: 1,
                   })
                   if (ann.underline) {
                     const ctw = calloutFont.widthOfTextAtSize(cLines[i], cfs)
-                    const culY = boxPt.y + 4 + cfs * 1.3 * i + cfs + cfs * 0.15
+                    const culY = boxPt.y + 4 + cfs * (ann.lineHeight || 1.3) * i + cfs + cfs * 0.15
                     const culStart = toPC({ x: boxPt.x + cxOff, y: culY })
                     const culEnd = toPC({ x: boxPt.x + cxOff + ctw, y: culY })
                     page.drawLine({ start: culStart, end: culEnd, thickness: Math.max(0.5, cfs * 0.05), color: c, opacity: 1 })
@@ -3160,6 +3396,18 @@ export default function PdfAnnotateTool() {
           </>
         )}
 
+        {/* ── Select tool ── */}
+        <div className="flex flex-col items-center gap-0.5">
+          <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Select</span>
+          <button onClick={() => setActiveTool('select')} title="Select (S)"
+            className={`p-1.5 rounded-md transition-colors ${
+              activeTool === 'select' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
+            }`}>
+            <MousePointer2 size={16} />
+          </button>
+        </div>
+        <div className="w-px h-8 bg-white/[0.08]" />
+
         {/* ── Draw group ── */}
         <div className="flex flex-col items-center gap-0.5">
           <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Draw</span>
@@ -3280,8 +3528,8 @@ export default function PdfAnnotateTool() {
         <div className="flex flex-col items-center gap-0.5">
           <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Style</span>
           <div className="flex items-center gap-1">
-            {/* Color (hidden for eraser/measure) */}
-            {activeTool !== 'eraser' && activeTool !== 'measure' && (
+            {/* Color (hidden for select/eraser/measure) */}
+            {activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure' && (
               <label className="w-7 h-7 rounded-md border border-white/[0.12] cursor-pointer flex-shrink-0 overflow-hidden"
                 style={{ backgroundColor: color }} aria-label="Annotation color">
                 <input type="color" value={color} onChange={e => setColor(e.target.value)} className="opacity-0 w-0 h-0" aria-label="Choose annotation color" />
@@ -3289,7 +3537,7 @@ export default function PdfAnnotateTool() {
             )}
 
             {/* Stroke width */}
-            {activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && (
+            {activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && (
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-white/40" title="Stroke Width">Width</span>
                 <input type="range" min={1} max={20} value={strokeWidth}
@@ -3345,6 +3593,26 @@ export default function PdfAnnotateTool() {
                 </select>
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] text-white/40" title="Font Size">Size</span>
+                  <select value={[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].includes(fontSize) ? fontSize : ''}
+                    onChange={e => {
+                      const fs = Number(e.target.value)
+                      if (fs) {
+                        setFontSize(fs)
+                        if (editingTextId) updateAnnotation(editingTextId, { fontSize: fs })
+                        else if (selectedAnnId) {
+                          const ann = getAnnotation(selectedAnnId)
+                          if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { fontSize: fs })
+                        }
+                      }
+                    }}
+                    className="w-14 px-0.5 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white">
+                    {[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                    {![8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].includes(fontSize) && (
+                      <option value={fontSize}>{fontSize}</option>
+                    )}
+                  </select>
                   <input type="number" min={8} max={72} step={0.5} value={fontSize}
                     onChange={e => {
                       const fs = Math.max(8, Math.min(72, Number(e.target.value)))
@@ -3355,15 +3623,16 @@ export default function PdfAnnotateTool() {
                         if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { fontSize: fs })
                       }
                     }}
-                    className="w-12 px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white text-center" />
+                    className="w-10 px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white text-center" />
                 </div>
 
-                {/* Formatting: Bold, Italic, Underline */}
+                {/* Formatting: Bold, Italic, Underline, Strikethrough */}
                 <div className="flex items-center gap-0.5">
                   {([
                     { key: 'bold' as const, Icon: Bold, label: 'Bold (Ctrl+B)', val: bold, set: setBold },
                     { key: 'italic' as const, Icon: Italic, label: 'Italic (Ctrl+I)', val: italic, set: setItalic },
                     { key: 'underline' as const, Icon: Underline, label: 'Underline (Ctrl+U)', val: underline, set: setUnderline },
+                    { key: 'strikethrough' as const, Icon: Strikethrough, label: 'Strikethrough (Ctrl+Shift+X)', val: strikethrough, set: setStrikethrough },
                   ] as const).map(({ key, Icon, label, val, set }) => (
                     <button key={key} onMouseDown={e => e.preventDefault()} onClick={() => {
                       const next = !val
@@ -3404,6 +3673,38 @@ export default function PdfAnnotateTool() {
                     </button>
                   ))}
                 </div>
+
+                {/* Text background highlight */}
+                <button onMouseDown={e => e.preventDefault()} onClick={() => {
+                  const next = textBgColor ? null : color
+                  setTextBgColor(next)
+                  if (editingTextId) updateAnnotation(editingTextId, { backgroundColor: next || undefined })
+                  else if (selectedAnnId) {
+                    const ann = getAnnotation(selectedAnnId)
+                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { backgroundColor: next || undefined })
+                  }
+                }} title="Text background highlight"
+                  className={`p-1 rounded transition-colors ${
+                    textBgColor ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+                  }`}>
+                  <Paintbrush size={13} />
+                </button>
+
+                {/* Line spacing */}
+                <select value={lineSpacing} onChange={e => {
+                  const lh = parseFloat(e.target.value)
+                  setLineSpacing(lh)
+                  if (editingTextId) updateAnnotation(editingTextId, { lineHeight: lh })
+                  else if (selectedAnnId) {
+                    const ann = getAnnotation(selectedAnnId)
+                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { lineHeight: lh })
+                  }
+                }} title="Line spacing"
+                  className="px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white">
+                  {[1.0, 1.15, 1.3, 1.5, 2.0].map(v => (
+                    <option key={v} value={v}>{v === 1.3 ? '1.3 (default)' : v.toString()}</option>
+                  ))}
+                </select>
               </>
             )}
 
@@ -3441,8 +3742,8 @@ export default function PdfAnnotateTool() {
               </>
             )}
 
-            {/* Opacity (not for highlighter, eraser, or measure) */}
-            {activeTool !== 'highlighter' && activeTool !== 'eraser' && activeTool !== 'measure' && (
+            {/* Opacity (not for select, highlighter, eraser, or measure) */}
+            {activeTool !== 'select' && activeTool !== 'highlighter' && activeTool !== 'eraser' && activeTool !== 'measure' && (
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-white/40" title="Opacity">Opacity</span>
                 <input type="range" min={10} max={100} step={5} value={opacity}
@@ -3577,7 +3878,7 @@ export default function PdfAnnotateTool() {
             <canvas
               ref={annCanvasRef}
               className="absolute top-0 left-0"
-              style={{ cursor: canvasCursor || ((activeTool === 'text' || activeTool === 'callout') && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
+              style={{ cursor: canvasCursor || ((activeTool === 'select' || activeTool === 'text' || activeTool === 'callout') && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
@@ -3613,7 +3914,7 @@ export default function PdfAnnotateTool() {
                       const needed = Math.max(DEFAULT_TEXTBOX_H, taEl.scrollHeight / RENDER_SCALE)
                       taEl.style.height = prev
                       if (Math.abs(needed - (editingAnn?.height || 0)) > 1) {
-                        updateAnnotation(editingTextId, { height: needed })
+                        updateAnnotationSilent(editingTextId, { height: needed })
                       }
                     })
                   }
@@ -3621,13 +3922,27 @@ export default function PdfAnnotateTool() {
                 onKeyDown={e => {
                   if (e.key === 'Escape') {
                     e.preventDefault()
+                    // Stop native propagation so the window keydown listener doesn't
+                    // see this Escape and deselect the annotation we're preserving
+                    e.nativeEvent.stopImmediatePropagation()
+                    // Mark that Escape triggered the commit so the blur handler
+                    // doesn't run commitTextEditing a second time
+                    escapeCommittedRef.current = true
                     // Two-step Escape: exit edit but preserve selection
                     commitTextEditing(true)
                   }
                 }}
                 onBlur={() => {
+                  // If Escape just committed, skip the blur commit to avoid a duplicate history step
+                  if (escapeCommittedRef.current) {
+                    escapeCommittedRef.current = false
+                    return
+                  }
                   // Small delay to allow click events to fire first
-                  setTimeout(() => commitTextEditing(true), 100)
+                  blurTimeoutRef.current = setTimeout(() => {
+                    blurTimeoutRef.current = null
+                    commitTextEditing(true)
+                  }, 100)
                 }}
                 style={{
                   position: 'absolute',
@@ -3639,11 +3954,11 @@ export default function PdfAnnotateTool() {
                   fontFamily: `"${editingAnn.fontFamily || 'Arial'}", sans-serif`,
                   fontWeight: editingAnn.bold ? 'bold' : 'normal',
                   fontStyle: editingAnn.italic ? 'italic' : 'normal',
-                  textDecoration: editingAnn.underline ? 'underline' : 'none',
+                  textDecoration: [editingAnn.underline && 'underline', editingAnn.strikethrough && 'line-through'].filter(Boolean).join(' ') || 'none',
                   textAlign: editingAnn.textAlign || 'left',
                   color: editingAnn.type === 'callout' ? (editingAnn.color || '#000000') : editingAnn.color,
                   backgroundColor: editingAnn.type === 'callout' ? '#ffffff' : 'transparent',
-                  lineHeight: '1.3',
+                  lineHeight: String(editingAnn.lineHeight || 1.3),
                   opacity: editingAnn.type === 'callout' ? 1 : editingAnn.opacity,
                   padding: editingAnn.type === 'callout' ? `${4 * RENDER_SCALE}px` : '0',
                 }}
@@ -3727,6 +4042,7 @@ export default function PdfAnnotateTool() {
           )}
           <span>· {
             selectedAnnId ? 'Arrow keys to nudge · Del to delete · Esc to deselect' :
+            activeTool === 'select' ? 'Click to select annotations' :
             activeTool === 'text' ? 'Click+drag to create text box' :
             activeTool === 'callout' ? 'Click+drag to create callout box' :
             activeTool === 'cloud' ? `Click to place vertices (${currentPtsRef.current.length} placed) · Double-click to close · Backspace to undo` :
