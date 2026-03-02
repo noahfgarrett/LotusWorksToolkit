@@ -17,13 +17,13 @@ import {
 
 // ── Types ──────────────────────────────────────────────
 
-type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight'
+type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight' | 'textStrikethrough'
 
 interface Point { x: number; y: number }
 
 interface Annotation {
   id: string
-  type: Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight'>
+  type: Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough'>
   points: Point[]
   color: string
   strokeWidth: number
@@ -140,7 +140,7 @@ const CURSOR_MAP: Record<ToolType, string> = {
   select: 'default', pencil: 'crosshair', highlighter: 'crosshair', line: 'crosshair',
   arrow: 'crosshair', rectangle: 'crosshair', circle: 'crosshair',
   cloud: 'crosshair', text: 'text', eraser: 'none',
-  callout: 'crosshair', measure: 'crosshair', textHighlight: 'text',
+  callout: 'crosshair', measure: 'crosshair', textHighlight: 'text', textStrikethrough: 'text',
 }
 
 const HANDLE_CURSOR_MAP: Record<string, string> = {
@@ -828,8 +828,21 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
     case 'pencil':
     case 'highlighter': {
       if (ann.rects && ann.rects.length > 0) {
-        for (const r of ann.rects) {
-          ctx.fillRect(r.x * scale, r.y * scale, r.w * scale, r.h * scale)
+        if (ann.strikethrough) {
+          // Draw strikethrough lines through the middle of each text rect
+          ctx.beginPath()
+          ctx.strokeStyle = ann.color
+          ctx.lineWidth = Math.max(1, 2 * scale)
+          for (const r of ann.rects) {
+            const midY = (r.y + r.h / 2) * scale
+            ctx.moveTo(r.x * scale, midY)
+            ctx.lineTo((r.x + r.w) * scale, midY)
+          }
+          ctx.stroke()
+        } else {
+          for (const r of ann.rects) {
+            ctx.fillRect(r.x * scale, r.y * scale, r.w * scale, r.h * scale)
+          }
         }
         break
       }
@@ -1168,6 +1181,19 @@ function ThumbnailItem({ pageNum, thumbnail, isCurrent, isSelected, hasAnnotatio
   )
 }
 
+// ── Text hit-testing helpers ─────────────────────────
+
+function isPointInTextItem(pt: { x: number; y: number }, item: { x: number; y: number; width: number; height: number }): boolean {
+  return pt.x >= item.x && pt.x <= item.x + item.width && pt.y >= item.y && pt.y <= item.y + item.height
+}
+
+function isPointInAnyTextItem(pt: { x: number; y: number }, items: { x: number; y: number; width: number; height: number }[]): boolean {
+  for (const item of items) {
+    if (isPointInTextItem(pt, item)) return true
+  }
+  return false
+}
+
 // ── Text highlight intersection helper ───────────────
 
 function findIntersectingTextItems(
@@ -1182,6 +1208,98 @@ function findIntersectingTextItems(
         item.y < selRect.y + selRect.h &&
         item.y + item.height > selRect.y) {
       result.push({ x: item.x, y: item.y, w: item.width, h: item.height })
+    }
+  }
+  return result
+}
+
+// ── Flow-based text selection (browser-style, sub-item precision) ────
+
+type TextItemLike = { x: number; y: number; width: number; height: number }
+
+interface FlowLine { y: number; h: number; items: TextItemLike[] }
+
+/** Group text items into lines, sorted in reading order. */
+function buildTextLines(items: TextItemLike[]): { lines: FlowLine[]; ordered: TextItemLike[] } {
+  const valid = items.filter(i => i.width > 0)
+  if (valid.length === 0) return { lines: [], ordered: [] }
+  const sorted = [...valid]
+  sorted.sort((a, b) => a.y - b.y || a.x - b.x)
+
+  const lines: FlowLine[] = []
+  for (const item of sorted) {
+    const last = lines[lines.length - 1]
+    if (last && Math.abs(item.y - last.y) < item.height * 0.5) {
+      last.items.push(item)
+    } else {
+      lines.push({ y: item.y, h: item.height, items: [item] })
+    }
+  }
+  for (const line of lines) line.items.sort((a, b) => a.x - b.x)
+  return { lines, ordered: lines.flatMap(l => l.items) }
+}
+
+/** Find the reading-order index of the item nearest to a point. */
+function nearestItemIndex(pt: { x: number; y: number }, lines: FlowLine[], ordered: TextItemLike[]): number {
+  let bestLine = 0, bestDist = Infinity
+  for (let i = 0; i < lines.length; i++) {
+    const d = Math.abs(pt.y - (lines[i].y + lines[i].h / 2))
+    if (d < bestDist) { bestDist = d; bestLine = i }
+  }
+  const lineItems = lines[bestLine].items
+  let bestItem = lineItems[0], bestXDist = Infinity
+  for (const item of lineItems) {
+    const d = Math.abs(pt.x - (item.x + item.width / 2))
+    if (d < bestXDist) { bestXDist = d; bestItem = item }
+  }
+  return ordered.indexOf(bestItem)
+}
+
+/**
+ * Select text items between two points with sub-item precision.
+ * The first and last item rects are clipped to the exact start/end x positions
+ * so the highlight matches the cursor position precisely (like browser text selection).
+ */
+function flowSelectTextItems(
+  items: TextItemLike[],
+  startPt: { x: number; y: number },
+  endPt: { x: number; y: number },
+): { x: number; y: number; w: number; h: number }[] {
+  const { lines, ordered } = buildTextLines(items)
+  if (ordered.length === 0) return []
+
+  const startIdx = nearestItemIndex(startPt, lines, ordered)
+  const endIdx = nearestItemIndex(endPt, lines, ordered)
+  const from = Math.min(startIdx, endIdx)
+  const to = Math.max(startIdx, endIdx)
+
+  // Determine which point is the leading/trailing edge in reading order
+  const leadPt = startIdx <= endIdx ? startPt : endPt
+  const trailPt = startIdx <= endIdx ? endPt : startPt
+
+  const result: { x: number; y: number; w: number; h: number }[] = []
+  for (let i = from; i <= to; i++) {
+    const item = ordered[i]
+    let x = item.x
+    let right = item.x + item.width
+
+    if (from === to) {
+      // Single item — clip both edges to the two points
+      const leftX = Math.min(leadPt.x, trailPt.x)
+      const rightX = Math.max(leadPt.x, trailPt.x)
+      x = Math.max(item.x, leftX)
+      right = Math.min(item.x + item.width, rightX)
+    } else if (i === from) {
+      // First item — clip left edge to lead point
+      x = Math.max(item.x, leadPt.x)
+    } else if (i === to) {
+      // Last item — clip right edge to trail point
+      right = Math.min(item.x + item.width, trailPt.x)
+    }
+
+    const w = right - x
+    if (w > 0) {
+      result.push({ x, y: item.y, w, h: item.height })
     }
   }
   return result
@@ -1214,6 +1332,11 @@ export default function PdfAnnotateTool() {
   const [lineSpacing, setLineSpacing] = useState(1.3)
   const [textAlign, setTextAlign] = useState<'left' | 'center' | 'right'>('left')
   const [canvasCursor, setCanvasCursor] = useState<string | null>(null)
+  const [selectTextToolbar, setSelectTextToolbar] = useState<{
+    rects: { x: number; y: number; w: number; h: number }[]
+    items: { text: string; x: number; y: number; width: number; height: number; page: number }[]
+    docPos: { x: number; y: number }
+  } | null>(null)
   const clipboardRef = useRef<Annotation | null>(null)
 
   // Shapes dropdown
@@ -1301,9 +1424,9 @@ export default function PdfAnnotateTool() {
   const textItemsCacheRef = useRef<Record<string, { text: string; x: number; y: number; width: number; height: number; page: number }[]>>({})
   const textHighlightStartRef = useRef<Point | null>(null)
   const textHighlightPreviewRectsRef = useRef<{ x: number; y: number; w: number; h: number }[]>([])
-  const [highlightDropdownOpen, setHighlightDropdownOpen] = useState(false)
-  const [activeHighlight, setActiveHighlight] = useState<'highlighter' | 'textHighlight'>('highlighter')
-  const highlightDropdownRef = useRef<HTMLDivElement>(null)
+  const selectTextStartRef = useRef<Point | null>(null)
+  const selectTextRectsRef = useRef<{ x: number; y: number; w: number; h: number }[]>([])
+  const [activeHighlight, setActiveHighlight] = useState<'highlighter' | 'textHighlight' | 'textStrikethrough'>('highlighter')
 
   // History
   const historyRef = useRef<PageAnnotations[]>([{}])
@@ -1405,7 +1528,7 @@ export default function PdfAnnotateTool() {
     for (const frag of mods.added) drawAnnotation(ctx, frag, RENDER_SCALE)
 
     // In-progress stroke
-    if (isDrawingRef.current && activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'cloud' && activeTool !== 'measure' && activeTool !== 'textHighlight') {
+    if (isDrawingRef.current && activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'cloud' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough') {
       const pts = currentPtsRef.current
       if (pts.length > 0) {
         const inProgress: Annotation = {
@@ -1428,6 +1551,38 @@ export default function PdfAnnotateTool() {
         ctx.fillRect(r.x * RENDER_SCALE, r.y * RENDER_SCALE, r.w * RENDER_SCALE, r.h * RENDER_SCALE)
       }
       ctx.restore()
+    }
+
+    // Text strikethrough preview (in-progress selection)
+    if (activeTool === 'textStrikethrough' && textHighlightPreviewRectsRef.current.length > 0) {
+      ctx.save()
+      ctx.globalAlpha = 1
+      ctx.strokeStyle = color
+      ctx.lineWidth = Math.max(1, 2 * RENDER_SCALE)
+      ctx.beginPath()
+      for (const r of textHighlightPreviewRectsRef.current) {
+        const midY = (r.y + r.h / 2) * RENDER_SCALE
+        ctx.moveTo(r.x * RENDER_SCALE, midY)
+        ctx.lineTo((r.x + r.w) * RENDER_SCALE, midY)
+      }
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    // Select tool: text selection highlight (during drag or finalized)
+    {
+      const selectRects = selectTextRectsRef.current.length > 0
+        ? selectTextRectsRef.current
+        : selectTextToolbar?.rects ?? []
+      if (selectRects.length > 0) {
+        ctx.save()
+        ctx.globalAlpha = 0.3
+        ctx.fillStyle = '#3B82F6'
+        for (const r of selectRects) {
+          ctx.fillRect(r.x * RENDER_SCALE, r.y * RENDER_SCALE, r.w * RENDER_SCALE, r.h * RENDER_SCALE)
+        }
+        ctx.restore()
+      }
     }
 
     // Cloud polygon vertex placement preview
@@ -1554,7 +1709,7 @@ export default function PdfAnnotateTool() {
       }
       drawMeasurement(ctx, preview, RENDER_SCALE, calibration, false)
     }
-  }, [annotations, currentPage, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx])
+  }, [annotations, currentPage, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar])
 
   // ── History management ───────────────────────────────
 
@@ -1719,6 +1874,9 @@ export default function PdfAnnotateTool() {
       measureStartRef.current = null
       measurePreviewRef.current = null
       textItemsCacheRef.current = {}
+      selectTextStartRef.current = null
+      selectTextRectsRef.current = []
+      setSelectTextToolbar(null)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       setLoadError(`Failed to load PDF: ${msg}`)
@@ -1764,7 +1922,7 @@ export default function PdfAnnotateTool() {
   // ── Re-render annotations ────────────────────────────
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { redraw() }, [pdfReady, annotations, selectedAnnId, measurements, calibration, selectedMeasureId, selectedArrowIdx])
+  useEffect(() => { redraw() }, [pdfReady, annotations, selectedAnnId, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar])
 
   // ── Keyboard shortcuts ───────────────────────────────
 
@@ -1811,6 +1969,10 @@ export default function PdfAnnotateTool() {
       // ── Escape: context-dependent ──
       if (e.key === 'Escape') {
         e.preventDefault()
+        // Clear text selection toolbar
+        if (selectTextToolbar) {
+          setSelectTextToolbar(null); selectTextStartRef.current = null; selectTextRectsRef.current = []; redraw(); return
+        }
         // Cancel in-progress measurement
         if (activeTool === 'measure' && measureStartRef.current) {
           measureStartRef.current = null; measurePreviewRef.current = null; redraw(); return
@@ -1978,6 +2140,14 @@ export default function PdfAnnotateTool() {
         return
       }
 
+      // ── Shift+X: text strikethrough tool ──
+      if (e.shiftKey && !mod && !e.altKey && e.key.toLowerCase() === 'x') {
+        e.preventDefault()
+        setActiveTool('textStrikethrough')
+        setActiveHighlight('textStrikethrough')
+        return
+      }
+
       // ── Single-letter tool switching (no modifier) ──
       if (!mod && !e.shiftKey && !e.altKey) {
         const toolMap: Record<string, ToolType> = {
@@ -1998,7 +2168,7 @@ export default function PdfAnnotateTool() {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [undo, redo, selectedAnnId, editingTextId, removeAnnotation, activeTool, selectedMeasureId,
-      redraw, annotations, currentPage, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage])
+      redraw, annotations, currentPage, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage, selectTextToolbar])
 
   // ── Zoom with scroll wheel ───────────────────────────
 
@@ -2036,8 +2206,15 @@ export default function PdfAnnotateTool() {
     setSelectedMeasureId(null)
     textHighlightStartRef.current = null
     textHighlightPreviewRectsRef.current = []
+    selectTextStartRef.current = null
+    selectTextRectsRef.current = []
+    setSelectTextToolbar(null)
     // Highlighter: default to yellow if color is the app default
     if ((activeTool === 'highlighter' || activeTool === 'textHighlight') && color === '#F47B20') setColor('#FFFF00')
+    // Text/callout: default to black if color is the app default
+    if ((activeTool === 'text' || activeTool === 'callout') && color === '#F47B20') setColor('#000000')
+    // Text strikethrough: default to red
+    if (activeTool === 'textStrikethrough' && (color === '#F47B20' || color === '#FFFF00')) setColor('#FF0000')
     if (editingTextId) {
       // Commit any open text edit
       commitTextEditing()
@@ -2071,23 +2248,10 @@ export default function PdfAnnotateTool() {
     return () => document.removeEventListener('pointerdown', handler)
   }, [textDropdownOpen])
 
-  // ── Close highlight dropdown on outside click ──────
-
-  useEffect(() => {
-    if (!highlightDropdownOpen) return
-    const handler = (e: PointerEvent) => {
-      if (highlightDropdownRef.current && !highlightDropdownRef.current.contains(e.target as Node)) {
-        setHighlightDropdownOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', handler)
-    return () => document.removeEventListener('pointerdown', handler)
-  }, [highlightDropdownOpen])
-
   // ── Cache text items for text highlight ───────────────
 
   useEffect(() => {
-    if (!pdfFile || activeTool !== 'textHighlight') return
+    if (!pdfFile || (activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'select')) return
     const cacheKey = `${currentPage}_${currentRotation}`
     if (textItemsCacheRef.current[cacheKey]) return
     let cancelled = false
@@ -2108,6 +2272,16 @@ export default function PdfAnnotateTool() {
       textareaRef.current.selectionStart = textareaRef.current.value.length
     }
   }, [editingTextId])
+
+  // ── Close text selection toolbar on scroll ──────────
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !selectTextToolbar) return
+    const handler = () => { setSelectTextToolbar(null); redraw() }
+    el.addEventListener('scroll', handler, { passive: true })
+    return () => el.removeEventListener('scroll', handler)
+  }, [selectTextToolbar, redraw])
 
   // ── Pointer handlers ─────────────────────────────────
 
@@ -2241,6 +2415,18 @@ export default function PdfAnnotateTool() {
             annId: hitAnn.id, startPt: pt, origPoints: [...hitAnn.points],
           }
         }
+        return
+      }
+
+      // Check if click point is on embedded PDF text → start text selection drag
+      setSelectTextToolbar(null)
+      const cacheKey = `${currentPage}_${currentRotation}`
+      const textItems = textItemsCacheRef.current[cacheKey] || []
+      if (textItems.length > 0 && isPointInAnyTextItem(pt, textItems)) {
+        isDrawingRef.current = true
+        selectTextStartRef.current = pt
+        selectTextRectsRef.current = []
+        setSelectedAnnId(null)
         return
       }
 
@@ -2421,8 +2607,8 @@ export default function PdfAnnotateTool() {
       return
     }
 
-    // ── Text Highlight tool: click-drag selection ──
-    if (activeTool === 'textHighlight') {
+    // ── Text Highlight / Strikethrough tool: click-drag selection ──
+    if (activeTool === 'textHighlight' || activeTool === 'textStrikethrough') {
       isDrawingRef.current = true
       textHighlightStartRef.current = pt
       textHighlightPreviewRectsRef.current = []
@@ -2430,10 +2616,14 @@ export default function PdfAnnotateTool() {
     }
 
     // ── Click-to-select (only for non-drawing tools) ──
-    if (!DRAW_TYPES.has(activeTool) && activeTool !== 'eraser' && activeTool !== 'highlighter' && (activeTool as ToolType) !== 'textHighlight') {
+    if (!DRAW_TYPES.has(activeTool) && activeTool !== 'eraser' && activeTool !== 'highlighter' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough') {
       const hitAny = findAnnotationAt(pt)
       if (hitAny) {
         setSelectedAnnId(hitAny.id)
+        // Sync color picker to selected text/callout annotation's color
+        if (hitAny.type === 'text' || hitAny.type === 'callout') {
+          setColor(hitAny.color)
+        }
         // Double-click text/callout → edit mode
         if ((hitAny.type === 'text' || hitAny.type === 'callout') && isDoubleClick) {
           enterEditMode(hitAny.id)
@@ -2488,7 +2678,7 @@ export default function PdfAnnotateTool() {
 
     currentPtsRef.current = [pt]
     redraw()
-  }, [getPoint, activeTool, annotations, currentPage, editingTextId, selectedAnnId,
+  }, [getPoint, activeTool, annotations, currentPage, currentRotation, editingTextId, selectedAnnId, selectTextToolbar,
       commitTextEditing, commitAnnotation, getAnnotation, findTextAnnotationAt, findCalloutAt, findAnnotationAt, enterEditMode, redraw,
       eraserRadius, eraserMode, zoom, color, strokeWidth, fontSize, opacity, fontFamily, bold, italic, underline, textAlign])
 
@@ -2526,16 +2716,29 @@ export default function PdfAnnotateTool() {
       setCanvasCursor(null)
     }
 
-    // ── Cursor tracking for select tool handles/annotations ──
-    if (!isDrawingRef.current && activeTool === 'select' && selectedAnnId) {
+    // ── Cursor tracking for select tool handles/annotations/text ──
+    if (!isDrawingRef.current && activeTool === 'select') {
       const hoverPt = getPoint(e)
-      const selAnn = (annotations[currentPage] || []).find(a => a.id === selectedAnnId)
-      if (selAnn) {
-        const handleThreshold = HANDLE_SIZE / zoom + 4
-        const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
-        if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
-        if (hitTest(hoverPt, selAnn, 4)) { setCanvasCursor('move'); return }
+      // 1. Check resize handles on selected annotation
+      if (selectedAnnId) {
+        const selAnn = (annotations[currentPage] || []).find(a => a.id === selectedAnnId)
+        if (selAnn) {
+          const handleThreshold = HANDLE_SIZE / zoom + 4
+          const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
+          if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
+          if (hitTest(hoverPt, selAnn, 4)) { setCanvasCursor('move'); return }
+        }
       }
+      // 2. Check if hovering over any annotation
+      const hoveredAnn = findAnnotationAt(hoverPt)
+      if (hoveredAnn) { setCanvasCursor('move'); return }
+      // 3. Check if hovering over embedded PDF text → I-beam
+      const cacheKey = `${currentPage}_${currentRotation}`
+      const textItems = textItemsCacheRef.current[cacheKey] || []
+      if (textItems.length > 0 && isPointInAnyTextItem(hoverPt, textItems)) {
+        setCanvasCursor('text'); return
+      }
+      // 4. Default arrow
       setCanvasCursor(null)
     }
 
@@ -2595,8 +2798,17 @@ export default function PdfAnnotateTool() {
       return
     }
 
-    // Text highlight: update preview rects
-    if (activeTool === 'textHighlight' && textHighlightStartRef.current) {
+    // Select tool: flow-based text selection preview during drag
+    if (activeTool === 'select' && selectTextStartRef.current) {
+      const cacheKey = `${currentPage}_${currentRotation}`
+      const items = textItemsCacheRef.current[cacheKey] || []
+      selectTextRectsRef.current = flowSelectTextItems(items, selectTextStartRef.current, pt)
+      redraw()
+      return
+    }
+
+    // Text highlight/strikethrough: update preview rects
+    if ((activeTool === 'textHighlight' || activeTool === 'textStrikethrough') && textHighlightStartRef.current) {
       const start = textHighlightStartRef.current
       const selRect = {
         x: Math.min(start.x, pt.x),
@@ -2801,7 +3013,7 @@ export default function PdfAnnotateTool() {
       currentPtsRef.current = [start, endPt]
     }
     redraw()
-  }, [getPoint, activeTool, annotations, currentPage, currentRotation, redraw, eraserRadius, eraserMode, zoom, straightLineMode, selectedAnnId])
+  }, [getPoint, activeTool, annotations, currentPage, currentRotation, redraw, eraserRadius, eraserMode, zoom, straightLineMode, selectedAnnId, findAnnotationAt])
 
   const handlePointerUp = useCallback(() => {
     if (!isDrawingRef.current) return
@@ -2814,11 +3026,38 @@ export default function PdfAnnotateTool() {
       return
     }
 
-    // Select tool: commit text/callout drag
+    // Select tool: commit text/callout drag or finalize text selection
     if (activeTool === 'select') {
       if (textDragRef.current) {
         pushHistory(structuredClone(annotations))
         textDragRef.current = null
+        return
+      }
+      if (selectTextStartRef.current) {
+        const rects = selectTextRectsRef.current
+        if (rects.length > 0) {
+          // Compute bounding box of all rects
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+          for (const r of rects) {
+            if (r.x < minX) minX = r.x
+            if (r.y < minY) minY = r.y
+            if (r.x + r.w > maxX) maxX = r.x + r.w
+            if (r.y + r.h > maxY) maxY = r.y + r.h
+          }
+          // Collect matching text items — match items whose position appears in the selected rects
+          const cacheKey = `${currentPage}_${currentRotation}`
+          const allItems = textItemsCacheRef.current[cacheKey] || []
+          const rectSet = new Set(rects.map(r => `${r.x},${r.y},${r.w},${r.h}`))
+          const matchedItems = allItems.filter(item =>
+            item.width > 0 && rectSet.has(`${item.x},${item.y},${item.width},${item.height}`)
+          )
+          // Doc-space center-top of bounding box
+          const docPos = { x: (minX + maxX) / 2, y: minY }
+          setSelectTextToolbar({ rects: [...rects], items: matchedItems, docPos })
+        }
+        selectTextStartRef.current = null
+        selectTextRectsRef.current = []
+        redraw()
         return
       }
       return
@@ -2941,19 +3180,21 @@ export default function PdfAnnotateTool() {
       return
     }
 
-    // Text highlight: create annotation from preview rects
-    if (activeTool === 'textHighlight') {
+    // Text highlight / strikethrough: create annotation from preview rects
+    if (activeTool === 'textHighlight' || activeTool === 'textStrikethrough') {
       const rects = textHighlightPreviewRectsRef.current
       if (rects.length > 0) {
+        const isStrikethrough = activeTool === 'textStrikethrough'
         const ann: Annotation = {
           id: genId(),
           type: 'highlighter',
           points: [{ x: 0, y: 0 }],
           color,
           strokeWidth: 0,
-          opacity: 0.4,
+          opacity: isStrikethrough ? 1 : 0.4,
           fontSize,
           rects: [...rects],
+          strikethrough: isStrikethrough || undefined,
         }
         commitAnnotation(ann)
       }
@@ -2973,7 +3214,7 @@ export default function PdfAnnotateTool() {
     const isHL = activeTool === 'highlighter'
     const ann: Annotation = {
       id: genId(),
-      type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight'>,
+      type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough'>,
       points: [...pts],
       color,
       strokeWidth: isHL ? strokeWidth * 3 : strokeWidth,
@@ -2982,7 +3223,7 @@ export default function PdfAnnotateTool() {
     }
     currentPtsRef.current = []
     commitAnnotation(ann)
-  }, [activeTool, color, strokeWidth, opacity, fontSize, commitAnnotation, currentPage,
+  }, [activeTool, color, strokeWidth, opacity, fontSize, commitAnnotation, currentPage, currentRotation,
       pushHistory, redraw, annotations, getAnnotation, updateAnnotation, selectedAnnId])
 
   // ── Export annotated PDF ─────────────────────────────
@@ -3031,13 +3272,26 @@ export default function PdfAnnotateTool() {
             case 'pencil':
             case 'highlighter':
               if (ann.rects && ann.rects.length > 0) {
-                for (const rect of ann.rects) {
-                  const tl = toPC({ x: rect.x, y: rect.y + rect.h })
-                  page.drawRectangle({
-                    x: tl.x, y: tl.y,
-                    width: rect.w, height: rect.h,
-                    color: c, opacity: ann.opacity,
-                  })
+                if (ann.strikethrough) {
+                  // Strikethrough lines through middle of each text rect
+                  for (const rect of ann.rects) {
+                    const midY = rect.y + rect.h / 2
+                    const lineStart = toPC({ x: rect.x, y: midY })
+                    const lineEnd = toPC({ x: rect.x + rect.w, y: midY })
+                    page.drawLine({
+                      start: lineStart, end: lineEnd,
+                      thickness: Math.max(0.5, 1.5), color: c, opacity: ann.opacity,
+                    })
+                  }
+                } else {
+                  for (const rect of ann.rects) {
+                    const tl = toPC({ x: rect.x, y: rect.y + rect.h })
+                    page.drawRectangle({
+                      x: tl.x, y: tl.y,
+                      width: rect.w, height: rect.h,
+                      color: c, opacity: ann.opacity,
+                    })
+                  }
                 }
               } else {
                 for (let i = 0; i < ann.points.length - 1; i++) {
@@ -3151,6 +3405,13 @@ export default function PdfAnnotateTool() {
                   const ulEnd = toPC({ x: ann.points[0].x + xOff + tw, y: ulY })
                   page.drawLine({ start: ulStart, end: ulEnd, thickness: Math.max(0.5, fs * 0.05), color: c, opacity: ann.opacity })
                 }
+                if (ann.strikethrough) {
+                  const tw = pdfFont.widthOfTextAtSize(lines[i], fs)
+                  const stY = ann.points[0].y + fs * (ann.lineHeight || 1.3) * i + fs - fs * 0.35
+                  const stStart = toPC({ x: ann.points[0].x + xOff, y: stY })
+                  const stEnd = toPC({ x: ann.points[0].x + xOff + tw, y: stY })
+                  page.drawLine({ start: stStart, end: stEnd, thickness: Math.max(0.5, fs * 0.05), color: c, opacity: ann.opacity })
+                }
               }
               break
             }
@@ -3191,6 +3452,13 @@ export default function PdfAnnotateTool() {
                     const culStart = toPC({ x: boxPt.x + cxOff, y: culY })
                     const culEnd = toPC({ x: boxPt.x + cxOff + ctw, y: culY })
                     page.drawLine({ start: culStart, end: culEnd, thickness: Math.max(0.5, cfs * 0.05), color: c, opacity: 1 })
+                  }
+                  if (ann.strikethrough) {
+                    const ctw = calloutFont.widthOfTextAtSize(cLines[i], cfs)
+                    const cstY = boxPt.y + 4 + cfs * (ann.lineHeight || 1.3) * i + cfs - cfs * 0.35
+                    const cstStart = toPC({ x: boxPt.x + cxOff, y: cstY })
+                    const cstEnd = toPC({ x: boxPt.x + cxOff + ctw, y: cstY })
+                    page.drawLine({ start: cstStart, end: cstEnd, thickness: Math.max(0.5, cfs * 0.05), color: c, opacity: 1 })
                   }
                 }
               }
@@ -3373,6 +3641,8 @@ export default function PdfAnnotateTool() {
 
   // Get the editing text annotation for textarea overlay
   const editingAnn = editingTextId ? getAnnotation(editingTextId) : null
+  const selectedAnn = selectedAnnId ? getAnnotation(selectedAnnId) : null
+  const isTextAnnSelected = activeTool === 'select' && selectedAnn && (selectedAnn.type === 'text' || selectedAnn.type === 'callout')
 
   return (
     <div className="h-full flex flex-col">
@@ -3440,41 +3710,54 @@ export default function PdfAnnotateTool() {
               )}
             </div>
 
-            {/* Highlight tools dropdown */}
-            <div ref={highlightDropdownRef} className="relative">
-              <button
-                onClick={() => { if (activeTool !== 'highlighter' && activeTool !== 'textHighlight') setActiveTool(activeHighlight); setHighlightDropdownOpen(o => !o) }}
-                title={activeHighlight === 'highlighter' ? 'Freehand Highlight (H)' : 'Text Highlight (Shift+H)'}
-                aria-label={`Highlight tool: ${activeHighlight === 'highlighter' ? 'Freehand' : 'Text'}`}
-                className={`p-1.5 rounded-md flex items-center gap-0.5 transition-colors ${
-                  activeTool === 'highlighter' || activeTool === 'textHighlight' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-                }`}>
-                {activeHighlight === 'textHighlight' ? <TextSelect size={16} /> : <Highlighter size={16} />}
-                <ChevronDown size={10} className="opacity-50" />
-              </button>
-              {highlightDropdownOpen && (
-                <div className="absolute top-full left-0 mt-1 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-lg z-50 py-1 min-w-[180px]">
-                  <button
-                    onMouseDown={e => e.preventDefault()}
-                    onClick={() => { setActiveTool('highlighter'); setActiveHighlight('highlighter'); setHighlightDropdownOpen(false) }}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                      activeTool === 'highlighter' ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
-                    }`}>
-                    <Highlighter size={14} />
-                    Freehand Highlight (H)
-                  </button>
-                  <button
-                    onMouseDown={e => e.preventDefault()}
-                    onClick={() => { setActiveTool('textHighlight'); setActiveHighlight('textHighlight'); setHighlightDropdownOpen(false) }}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                      activeTool === 'textHighlight' ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
-                    }`}>
-                    <TextSelect size={14} />
-                    Text Highlight (Shift+H)
-                  </button>
-                </div>
-              )}
-            </div>
+            {/* Highlight button — instant apply if text selected, otherwise freehand tool */}
+            <button
+              onClick={() => {
+                if (selectTextToolbar) {
+                  const ann: Annotation = {
+                    id: genId(), type: 'highlighter',
+                    points: [{ x: 0, y: 0 }], color: '#FFFF00', strokeWidth: 0,
+                    opacity: 0.4, fontSize, rects: [...selectTextToolbar.rects],
+                  }
+                  commitAnnotation(ann)
+                  setSelectTextToolbar(null)
+                  redraw()
+                } else {
+                  setActiveTool('highlighter')
+                  setActiveHighlight('highlighter')
+                }
+              }}
+              title="Highlight (H)"
+              className={`p-1.5 rounded-md transition-colors ${
+                activeTool === 'highlighter' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
+              }`}>
+              <Highlighter size={16} />
+            </button>
+
+            {/* Strikethrough button — instant apply if text selected, otherwise strikethrough tool */}
+            <button
+              onClick={() => {
+                if (selectTextToolbar) {
+                  const ann: Annotation = {
+                    id: genId(), type: 'highlighter',
+                    points: [{ x: 0, y: 0 }], color: '#FF0000', strokeWidth: 0,
+                    opacity: 1, fontSize, rects: [...selectTextToolbar.rects],
+                    strikethrough: true,
+                  }
+                  commitAnnotation(ann)
+                  setSelectTextToolbar(null)
+                  redraw()
+                } else {
+                  setActiveTool('textStrikethrough')
+                  setActiveHighlight('textStrikethrough')
+                }
+              }}
+              title="Strikethrough (Shift+X)"
+              className={`p-1.5 rounded-md transition-colors ${
+                activeTool === 'textStrikethrough' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
+              }`}>
+              <Strikethrough size={16} />
+            </button>
 
             {/* Text tools dropdown */}
             <div ref={textDropdownRef} className="relative">
@@ -3528,16 +3811,19 @@ export default function PdfAnnotateTool() {
         <div className="flex flex-col items-center gap-0.5">
           <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Style</span>
           <div className="flex items-center gap-1">
-            {/* Color (hidden for select/eraser/measure) */}
-            {activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure' && (
+            {/* Color (hidden for select/eraser/measure, but shown when text/callout annotation is selected) */}
+            {(isTextAnnSelected || (activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure')) && (
               <label className="w-7 h-7 rounded-md border border-white/[0.12] cursor-pointer flex-shrink-0 overflow-hidden"
                 style={{ backgroundColor: color }} aria-label="Annotation color">
-                <input type="color" value={color} onChange={e => setColor(e.target.value)} className="opacity-0 w-0 h-0" aria-label="Choose annotation color" />
+                <input type="color" value={color} onChange={e => {
+                  setColor(e.target.value)
+                  if (isTextAnnSelected && selectedAnnId) updateAnnotation(selectedAnnId, { color: e.target.value })
+                }} className="opacity-0 w-0 h-0" aria-label="Choose annotation color" />
               </label>
             )}
 
             {/* Stroke width */}
-            {activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && (
+            {activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && (
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-white/40" title="Stroke Width">Width</span>
                 <input type="range" min={1} max={20} value={strokeWidth}
@@ -3878,7 +4164,7 @@ export default function PdfAnnotateTool() {
             <canvas
               ref={annCanvasRef}
               className="absolute top-0 left-0"
-              style={{ cursor: canvasCursor || ((activeTool === 'select' || activeTool === 'text' || activeTool === 'callout') && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
+              style={{ mixBlendMode: 'multiply', cursor: canvasCursor || ((activeTool === 'select' || activeTool === 'text' || activeTool === 'callout') && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
@@ -3997,6 +4283,67 @@ export default function PdfAnnotateTool() {
           )}
         </div>
       </div>
+
+      {/* ── Floating text selection toolbar ────────── */}
+      {selectTextToolbar && annCanvasRef.current && (() => {
+        const canvasRect = annCanvasRef.current!.getBoundingClientRect()
+        const screenX = canvasRect.left + selectTextToolbar.docPos.x * RENDER_SCALE * zoom
+        const screenY = canvasRect.top + selectTextToolbar.docPos.y * RENDER_SCALE * zoom
+        const clampedX = Math.max(80, Math.min(window.innerWidth - 80, screenX))
+        const clampedY = Math.max(8, screenY - 44)
+        return (
+          <div
+            style={{ position: 'fixed', left: clampedX, top: clampedY, transform: 'translateX(-50%)', zIndex: 50 }}
+            className="flex items-center gap-0.5 px-1 py-0.5 bg-[#1e1e2e] border border-white/10 rounded-lg shadow-lg"
+          >
+            <button
+              title="Highlight"
+              onClick={() => {
+                const ann: Annotation = {
+                  id: genId(), type: 'highlighter',
+                  points: [{ x: 0, y: 0 }], color: '#FFFF00', strokeWidth: 0,
+                  opacity: 0.4, fontSize, rects: [...selectTextToolbar.rects],
+                }
+                commitAnnotation(ann)
+                setSelectTextToolbar(null)
+                redraw()
+              }}
+              className="p-1.5 text-white/80 hover:bg-white/10 rounded text-xs"
+            >
+              <Highlighter size={14} />
+            </button>
+            <button
+              title="Strikethrough"
+              onClick={() => {
+                const ann: Annotation = {
+                  id: genId(), type: 'highlighter',
+                  points: [{ x: 0, y: 0 }], color: '#FF0000', strokeWidth: 0,
+                  opacity: 1, fontSize, rects: [...selectTextToolbar.rects],
+                  strikethrough: true,
+                }
+                commitAnnotation(ann)
+                setSelectTextToolbar(null)
+                redraw()
+              }}
+              className="p-1.5 text-white/80 hover:bg-white/10 rounded text-xs"
+            >
+              <Strikethrough size={14} />
+            </button>
+            <button
+              title="Copy text"
+              onClick={() => {
+                const text = selectTextToolbar.items.map(i => i.text).join(' ')
+                navigator.clipboard.writeText(text).catch(() => {})
+                setSelectTextToolbar(null)
+                redraw()
+              }}
+              className="p-1.5 text-white/80 hover:bg-white/10 rounded text-xs"
+            >
+              <TextSelect size={14} />
+            </button>
+          </div>
+        )
+      })()}
 
       {/* ── Page navigation footer ─────────────────── */}
       <div className="flex items-center justify-center gap-3 px-3 py-2 border-t border-white/[0.06] flex-shrink-0">

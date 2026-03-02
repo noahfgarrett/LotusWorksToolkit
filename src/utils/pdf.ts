@@ -499,12 +499,13 @@ export async function extractPositionedText(
   const items: { text: string; x: number; y: number; width: number; height: number; page: number }[] = []
   for (const item of content.items) {
     if (!('str' in item) || !item.str.trim()) continue
+    const h = Math.abs(item.transform[0]) || 12
     items.push({
       text: item.str,
       x: item.transform[4],
-      y: viewport.height - item.transform[5],
+      y: viewport.height - item.transform[5] - h * 0.85, // transform[5] is baseline; ascent ≈ 85% of em size
       width: item.width ?? 0,
-      height: Math.abs(item.transform[0]) || 12,
+      height: h,
       page: pageNumber,
     })
   }
