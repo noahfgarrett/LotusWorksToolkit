@@ -1194,6 +1194,30 @@ function isPointInAnyTextItem(pt: { x: number; y: number }, items: { x: number; 
   return false
 }
 
+// ── Rotation coordinate transform ────────────────────
+
+/** Transform a point between two rotation coordinate spaces via the canonical (0°) space. */
+function rotatePoint(p: Point, fromRot: number, toRot: number, origW: number, origH: number): Point {
+  if (fromRot === toRot) return p
+  // Step 1: fromRot → 0°
+  let x0: number, y0: number
+  const fr = ((fromRot % 360) + 360) % 360
+  switch (fr) {
+    case 90:  x0 = p.y;          y0 = origH - p.x; break
+    case 180: x0 = origW - p.x;  y0 = origH - p.y; break
+    case 270: x0 = origW - p.y;  y0 = p.x;         break
+    default:  x0 = p.x;          y0 = p.y;          break
+  }
+  // Step 2: 0° → toRot
+  const tr = ((toRot % 360) + 360) % 360
+  switch (tr) {
+    case 90:  return { x: origH - y0, y: x0 }
+    case 180: return { x: origW - x0, y: origH - y0 }
+    case 270: return { x: y0,         y: origW - x0 }
+    default:  return { x: x0,         y: y0 }
+  }
+}
+
 // ── Text highlight intersection helper ───────────────
 
 function findIntersectingTextItems(
@@ -1835,10 +1859,68 @@ export default function PdfAnnotateTool() {
   // ── Rotation ─────────────────────────────────────────
 
   const rotatePage = useCallback((delta: number) => {
-    setPageRotations(prev => {
-      const current = prev[currentPage] || 0
-      return { ...prev, [currentPage]: ((current + delta) % 360 + 360) % 360 }
-    })
+    const oldRot = pageRotations[currentPage] || 0
+    const newRot = ((oldRot + delta) % 360 + 360) % 360
+    if (oldRot === newRot) return
+
+    // Compute original (0° rotation) page dimensions from current pageDimsRef
+    const dims = pageDimsRef.current
+    const origW = (oldRot === 90 || oldRot === 270) ? dims.height : dims.width
+    const origH = (oldRot === 90 || oldRot === 270) ? dims.width : dims.height
+
+    // Transform annotations on current page to new rotation space
+    const pageAnns = annotations[currentPage]
+    if (pageAnns && pageAnns.length > 0) {
+      const tp = (p: Point) => rotatePoint(p, oldRot, newRot, origW, origH)
+      const transformed = pageAnns.map(ann => {
+        const newPoints = ann.points.map(tp)
+        let newWidth = ann.width
+        let newHeight = ann.height
+        // For annotations with width/height, transform the bounding box corners
+        if (ann.width !== undefined && ann.height !== undefined) {
+          const tl = ann.points[0]
+          const br = { x: tl.x + ann.width, y: tl.y + ann.height }
+          const ttl = tp(tl)
+          const tbr = tp(br)
+          newPoints[0] = { x: Math.min(ttl.x, tbr.x), y: Math.min(ttl.y, tbr.y) }
+          newWidth = Math.abs(tbr.x - ttl.x)
+          newHeight = Math.abs(tbr.y - ttl.y)
+        }
+        const newRects = ann.rects?.map(r => {
+          const rtl = tp({ x: r.x, y: r.y })
+          const rbr = tp({ x: r.x + r.w, y: r.y + r.h })
+          return { x: Math.min(rtl.x, rbr.x), y: Math.min(rtl.y, rbr.y), w: Math.abs(rbr.x - rtl.x), h: Math.abs(rbr.y - rtl.y) }
+        })
+        const newArrows = ann.arrows?.map(tp)
+        return {
+          ...ann, points: newPoints,
+          ...(newWidth !== undefined ? { width: newWidth } : {}),
+          ...(newHeight !== undefined ? { height: newHeight } : {}),
+          ...(newRects ? { rects: newRects } : {}),
+          ...(newArrows ? { arrows: newArrows } : {}),
+        }
+      })
+      setAnnotations(prev => ({ ...prev, [currentPage]: transformed }))
+    }
+
+    // Transform measurements on current page
+    const pageMeas = measurements[currentPage]
+    if (pageMeas && pageMeas.length > 0) {
+      const tp = (p: Point) => rotatePoint(p, oldRot, newRot, origW, origH)
+      setMeasurements(prev => ({
+        ...prev,
+        [currentPage]: pageMeas.map(m => ({ ...m, startPt: tp(m.startPt), endPt: tp(m.endPt) })),
+      }))
+    }
+
+    // Clear text selection and in-progress state
+    setSelectTextToolbar(null)
+    selectTextStartRef.current = null
+    selectTextRectsRef.current = []
+    setSelectedAnnId(null)
+    setSelectedMeasureId(null)
+
+    setPageRotations(prev => ({ ...prev, [currentPage]: newRot }))
     // Clear thumbnails for this page since it changed
     setThumbnails(prev => {
       const next = { ...prev }
@@ -1846,7 +1928,7 @@ export default function PdfAnnotateTool() {
       return next
     })
     loadingThumbs.current.delete(currentPage)
-  }, [currentPage])
+  }, [currentPage, pageRotations, annotations, measurements])
 
   // ── PDF loading ──────────────────────────────────────
 
