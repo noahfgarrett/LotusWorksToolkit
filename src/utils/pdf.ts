@@ -609,6 +609,30 @@ export async function extractPageLines(
 }
 
 // ============================================
+// Page Dimensions (batch)
+// ============================================
+
+/**
+ * Get the viewport dimensions for all pages without rendering pixels.
+ * Returns a Map of page number → { width, height } in canvas-pixel space at the given scale.
+ */
+export async function getAllPageDimensions(
+  pdfFile: PDFFile,
+  scale: number,
+  rotations: Record<number, number> = {},
+): Promise<Map<number, { width: number; height: number }>> {
+  const doc = await getCachedDoc(pdfFile.id, pdfFile.file)
+  const dims = new Map<number, { width: number; height: number }>()
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i)
+    const rotation = rotations[i] || 0
+    const viewport = page.getViewport({ scale, rotation })
+    dims.set(i, { width: Math.floor(viewport.width), height: Math.floor(viewport.height) })
+  }
+  return dims
+}
+
+// ============================================
 // Cleanup
 // ============================================
 
