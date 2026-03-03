@@ -4649,8 +4649,9 @@ export default function PdfAnnotateTool() {
         )}
 
         {/* ── Canvas area ─────────────────────────── */}
-        <div ref={scrollRef} className="flex-1 overflow-auto bg-black/20 relative p-6">
-          <div ref={innerRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: innerScaledW || undefined, height: innerScaledH || undefined, margin: '0 auto' }} className="flex flex-col items-center gap-6">
+        <div ref={scrollRef} className="flex-1 overflow-auto bg-black/20 relative">
+          <div className="flex justify-center p-6" style={{ minHeight: '100%', minWidth: 'fit-content' }}>
+          <div ref={innerRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: innerScaledW || undefined, height: innerScaledH || undefined }} className="flex flex-col items-center gap-6">
             {Array.from({ length: pdfFile.pageCount }, (_, i) => i + 1).map(pageNum => {
               const dims = pageDimsMap.current.get(pageNum)
               const editingOnThisPage = editingAnn && findAnnotationPage(editingAnn.id) === pageNum
@@ -4767,6 +4768,7 @@ export default function PdfAnnotateTool() {
                 </div>
               )
             })}
+          </div>
           </div>
         </div>
       </div>
