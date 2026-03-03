@@ -2191,13 +2191,13 @@ export default function PdfAnnotateTool() {
     const onScroll = () => {
       cancelAnimationFrame(rafId)
       rafId = requestAnimationFrame(() => {
-        const viewCenterY = el.scrollTop + el.clientHeight / 2
+        const scrollRect = el.getBoundingClientRect()
+        const viewCenterY = scrollRect.top + scrollRect.height / 2
         let closest = currentPageRef.current
         let minDist = Infinity
         for (const [pageNum, refs] of pageRefsMap.current) {
-          const top = refs.container.offsetTop * zoomRef.current
-          const h = refs.container.offsetHeight * zoomRef.current
-          const pageCenterY = top + h / 2
+          const rect = refs.container.getBoundingClientRect()
+          const pageCenterY = rect.top + rect.height / 2
           const dist = Math.abs(pageCenterY - viewCenterY)
           if (dist < minDist) { minDist = dist; closest = pageNum }
         }
@@ -4129,6 +4129,24 @@ export default function PdfAnnotateTool() {
   const activeTextDef = TEXT_TOOLS.find(s => s.type === activeTool) || TEXT_TOOLS.find(s => s.type === activeText)!
   const ActiveTextIcon = activeTextDef.icon
 
+  // Compute scaled layout dimensions for innerRef so it centers when zoomed out.
+  // CSS transform: scale() shrinks visually but the layout box stays at unscaled size;
+  // setting explicit width/height + margin:auto makes the box match its visual size.
+  const innerScaledW = (() => {
+    if (!pdfFile || maxCanvasWidthRef.current === 0) return 0
+    return maxCanvasWidthRef.current * zoom
+  })()
+  const innerScaledH = (() => {
+    if (!pdfFile) return 0
+    let totalH = 0
+    for (let p = 1; p <= pdfFile.pageCount; p++) {
+      const d = pageDimsMap.current.get(p)
+      if (d) totalH += d.height
+    }
+    totalH += Math.max(0, pdfFile.pageCount - 1) * 24 // gap-6 = 24px
+    return totalH * zoom
+  })()
+
   // Get the editing text annotation for textarea overlay
   const editingAnn = editingTextId ? getAnnotation(editingTextId) : null
   const selectedAnn = selectedAnnId ? getAnnotation(selectedAnnId) : null
@@ -4631,8 +4649,8 @@ export default function PdfAnnotateTool() {
         )}
 
         {/* ── Canvas area ─────────────────────────── */}
-        <div ref={scrollRef} className="flex-1 overflow-auto p-6 bg-black/20 relative">
-          <div ref={innerRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0' }} className="flex flex-col items-center gap-6">
+        <div ref={scrollRef} className="flex-1 overflow-auto bg-black/20 relative p-6">
+          <div ref={innerRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: innerScaledW || undefined, height: innerScaledH || undefined, margin: '0 auto' }} className="flex flex-col items-center gap-6">
             {Array.from({ length: pdfFile.pageCount }, (_, i) => i + 1).map(pageNum => {
               const dims = pageDimsMap.current.get(pageNum)
               const editingOnThisPage = editingAnn && findAnnotationPage(editingAnn.id) === pageNum
