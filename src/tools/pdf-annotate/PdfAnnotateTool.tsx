@@ -1952,7 +1952,7 @@ export default function PdfAnnotateTool() {
     setLineSpacing(ann.lineHeight || 1.3)
     setTextAlign(ann.textAlign || 'left')
     // Auto-focus textarea
-    requestAnimationFrame(() => textareaRef.current?.focus())
+    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
   }, [annotations])
 
   // ── Fit to window ──────────────────────────────────
@@ -2253,7 +2253,7 @@ export default function PdfAnnotateTool() {
           if (k === 'i') { const v = !ann.italic; setItalic(v); updateAnnotation(editingTextId, { italic: v }) }
           if (k === 'u') { const v = !ann.underline; setUnderline(v); updateAnnotation(editingTextId, { underline: v }) }
           requestAnimationFrame(() => {
-            textareaRef.current?.focus()
+            textareaRef.current?.focus({ preventScroll: true })
             textareaRef.current?.setSelectionRange(selStart, selEnd)
           })
           return
@@ -2267,7 +2267,7 @@ export default function PdfAnnotateTool() {
           const selEnd = ta?.selectionEnd ?? 0
           const v = !ann.strikethrough; setStrikethrough(v); updateAnnotation(editingTextId, { strikethrough: v })
           requestAnimationFrame(() => {
-            textareaRef.current?.focus()
+            textareaRef.current?.focus({ preventScroll: true })
             textareaRef.current?.setSelectionRange(selStart, selEnd)
           })
           return
@@ -2702,7 +2702,7 @@ export default function PdfAnnotateTool() {
 
   useEffect(() => {
     if (editingTextId && textareaRef.current) {
-      textareaRef.current.focus()
+      textareaRef.current.focus({ preventScroll: true })
       // Place cursor at end
       textareaRef.current.selectionStart = textareaRef.current.value.length
     }
