@@ -6,6 +6,8 @@ import { ColorPicker } from '@/components/common/ColorPicker.tsx'
 import { useAppStore } from '@/stores/appStore.ts'
 import { loadPDFFile, renderPageToCanvas, generateThumbnail, removePDFFromCache, getPDFBytes, extractPositionedText, getAllPageDimensions } from '@/utils/pdf.ts'
 import { downloadBlob } from '@/utils/download.ts'
+import { saveSession, loadSession, clearSession } from './storage.ts'
+import type { PdfAnnotateSession } from './storage.ts'
 import { formatFileSize } from '@/utils/fileReader.ts'
 import type { PDFFile } from '@/types'
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib'
@@ -1497,6 +1499,10 @@ export default function PdfAnnotateTool() {
   const [dimsReady, setDimsReady] = useState(0)
   useEffect(() => { zoomRef.current = zoom }, [zoom])
 
+  // Session restore
+  const pendingScrollRef = useRef<{ scrollTop: number; scrollLeft: number } | null>(null)
+  const restoringSessionRef = useRef(false)
+
   // Text highlight
   const textItemsCacheRef = useRef<Record<string, { text: string; x: number; y: number; width: number; height: number; page: number }[]>>({})
   const textHighlightStartRef = useRef<Point | null>(null)
@@ -2102,22 +2108,92 @@ export default function PdfAnnotateTool() {
       }
       maxCanvasWidthRef.current = maxW
       setDimsReady(v => v + 1)
+
+      // Restore session if file matches
+      const session = loadSession()
+      if (session?.version === 1 && session.file.fileName === file.name && session.file.fileSize === file.size) {
+        setAnnotations(session.annotations as PageAnnotations)
+        setMeasurements(session.measurements as Record<number, Measurement[]>)
+        setPageRotations(session.pageRotations)
+        setCalibration(session.calibration as CalibrationState)
+        setZoom(session.zoom)
+        setCurrentPage(session.currentPage)
+        setColor(session.color)
+        setFontSize(session.fontSize)
+        setFontFamily(session.fontFamily)
+        setStrokeWidth(session.strokeWidth)
+        setOpacity(session.opacity)
+        setActiveTool(session.activeTool as ToolType)
+        setBold(session.bold)
+        setItalic(session.italic)
+        setUnderline(session.underline)
+        setStrikethrough(session.strikethrough)
+        setTextAlign(session.textAlign as 'left' | 'center' | 'right')
+        setTextBgColor(session.textBgColor)
+        setLineSpacing(session.lineSpacing)
+        setEraserRadius(session.eraserRadius)
+        setEraserMode(session.eraserMode as 'partial' | 'object')
+        setActiveHighlight(session.activeHighlight as 'highlighter' | 'textHighlight' | 'textStrikethrough')
+        setActiveDraw(session.activeDraw as ToolType)
+        setActiveText(session.activeText as ToolType)
+        historyRef.current = [structuredClone(session.annotations as PageAnnotations)]
+        historyIdxRef.current = 0
+        pendingScrollRef.current = { scrollTop: session.scrollTop, scrollLeft: session.scrollLeft }
+        restoringSessionRef.current = true
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       setLoadError(`Failed to load PDF: ${msg}`)
     }
   }, [annotations])
 
-  // ── Warn before closing with unsaved annotations ────
+  // ── Warn before closing & flush session ─────────────
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (Object.values(annotations).some(a => a.length > 0)) {
         e.preventDefault()
       }
+      const f = pdfFileRef.current
+      if (f) {
+        const el = scrollRef.current
+        saveSession({
+          version: 1,
+          file: { fileName: f.name, fileSize: f.size },
+          annotations, measurements, pageRotations, calibration,
+          zoom, scrollTop: el?.scrollTop ?? 0, scrollLeft: el?.scrollLeft ?? 0, currentPage,
+          color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
+          bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+          eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+        } satisfies PdfAnnotateSession)
+      }
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [annotations])
+  }, [annotations, measurements, pageRotations, calibration,
+      zoom, currentPage, color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
+      bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText])
+
+  // ── Debounced session save ─────────────────────────
+  useEffect(() => {
+    if (!pdfFile) return
+    const timer = setTimeout(() => {
+      const el = scrollRef.current
+      saveSession({
+        version: 1,
+        file: { fileName: pdfFile.name, fileSize: pdfFile.size },
+        annotations, measurements, pageRotations, calibration,
+        zoom, scrollTop: el?.scrollTop ?? 0, scrollLeft: el?.scrollLeft ?? 0, currentPage,
+        color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
+        bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+        eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+      } satisfies PdfAnnotateSession)
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [pdfFile, annotations, measurements, pageRotations, calibration, zoom, currentPage,
+      color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
+      bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText])
 
   // ── Thumbnail loading ────────────────────────────────
 
@@ -2176,8 +2252,21 @@ export default function PdfAnnotateTool() {
       obs.observe(refs.container)
     }
 
-    // Fit to window on initial load
-    requestAnimationFrame(() => fitToWindow())
+    // Restore scroll from session or fit to window on initial load
+    if (restoringSessionRef.current) {
+      restoringSessionRef.current = false
+      setTimeout(() => {
+        const el = scrollRef.current
+        const pending = pendingScrollRef.current
+        if (el && pending) {
+          el.scrollTop = pending.scrollTop
+          el.scrollLeft = pending.scrollLeft
+          pendingScrollRef.current = null
+        }
+      }, 150)
+    } else {
+      requestAnimationFrame(() => fitToWindow())
+    }
 
     return () => obs.disconnect()
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4070,6 +4159,7 @@ export default function PdfAnnotateTool() {
 
   const handleReset = useCallback(() => {
     if (!confirm('Discard all annotations and start over?')) return
+    clearSession()
     if (pdfFileRef.current) removePDFFromCache(pdfFileRef.current.id)
     setPdfFile(null)
     setAnnotations({})
@@ -4097,8 +4187,23 @@ export default function PdfAnnotateTool() {
   // ── Render ───────────────────────────────────────────
 
   if (!pdfFile) {
+    const savedSession = loadSession()
     return (
       <div className="h-full flex flex-col gap-4">
+        {savedSession && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+            <p className="text-sm text-blue-300 flex-1">
+              Previous session found. Re-select <strong>{savedSession.file.fileName}</strong> to restore your annotations.
+            </p>
+            <button
+              onClick={() => { clearSession(); forceRender(v => v + 1) }}
+              className="p-1 rounded text-blue-400/60 hover:text-blue-400 transition-colors"
+              aria-label="Dismiss session banner"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         <FileDropZone
           onFiles={handleFiles}
           accept="application/pdf"
