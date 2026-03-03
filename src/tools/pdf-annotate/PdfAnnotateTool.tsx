@@ -2,6 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { FileDropZone } from '@/components/common/FileDropZone.tsx'
 import { Button } from '@/components/common/Button.tsx'
 import { Modal } from '@/components/common/Modal.tsx'
+import { ColorPicker } from '@/components/common/ColorPicker.tsx'
+import { useAppStore } from '@/stores/appStore.ts'
 import { loadPDFFile, renderPageToCanvas, generateThumbnail, removePDFFromCache, getPDFBytes, extractPositionedText } from '@/utils/pdf.ts'
 import { downloadBlob } from '@/utils/download.ts'
 import { formatFileSize } from '@/utils/fileReader.ts'
@@ -66,6 +68,8 @@ const MAX_HISTORY = 50
 const HANDLE_SIZE = 6
 const DEFAULT_TEXTBOX_W = 200
 const DEFAULT_TEXTBOX_H = 50
+const ANN_COLORS = ['#000000', '#FF0000', '#FF6600', '#F47B20', '#FFFF00', '#22C55E', '#3B82F6', '#8B5CF6', '#FFFFFF']
+const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] as const
 
 type ToolDef = { type: ToolType; icon: React.ComponentType<{ size?: number }>; label: string }
 
@@ -200,6 +204,18 @@ function wrapText(text: string, maxWidth: number, fontSize: number, bold = false
     result.push(current)
   }
   return result
+}
+
+// ── Auto-height text box helper ──────────────────────
+
+function computeTextBoxHeight(ann: Annotation, measureFn?: (text: string) => number): number {
+  if (!ann.text || !ann.width) return DEFAULT_TEXTBOX_H
+  const fs = ann.fontSize || (ann.type === 'callout' ? 14 : 16)
+  const lh = ann.lineHeight || 1.3
+  const lines = wrapText(ann.text, ann.width, fs, ann.bold || false, measureFn)
+  const contentH = lines.length * fs * lh
+  const padding = ann.type === 'callout' ? 8 : 0
+  return Math.max(DEFAULT_TEXTBOX_H, contentH + padding)
 }
 
 // ── Cloud drawing helper ─────────────────────────────
@@ -928,6 +944,13 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
       ctx.textBaseline = 'top'
       ctx.globalAlpha = ann.opacity
       const align = ann.textAlign || 'left'
+      // Clip text to bounding box
+      if (ann.width && ann.height) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(pts[0].x * scale, pts[0].y * scale, ann.width * scale, ann.height * scale)
+        ctx.clip()
+      }
       const textLH = ann.lineHeight || 1.3
 
       // Background highlight
@@ -998,6 +1021,7 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
           }
         }
       }
+      if (ann.width && ann.height) ctx.restore()
       break
     }
     case 'callout': {
@@ -1332,6 +1356,8 @@ function flowSelectTextItems(
 // ── Component ──────────────────────────────────────────
 
 export default function PdfAnnotateTool() {
+  const addToast = useAppStore(s => s.addToast)
+
   // State
   const [pdfFile, setPdfFile] = useState<PDFFile | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -1362,6 +1388,7 @@ export default function PdfAnnotateTool() {
     docPos: { x: number; y: number }
   } | null>(null)
   const clipboardRef = useRef<Annotation | null>(null)
+  const [hoveredAnnId, setHoveredAnnId] = useState<string | null>(null)
 
   // Shapes dropdown
   const [shapesDropdownOpen, setShapesDropdownOpen] = useState(false)
@@ -1370,6 +1397,9 @@ export default function PdfAnnotateTool() {
   // Text tools dropdown
   const [textDropdownOpen, setTextDropdownOpen] = useState(false)
   const [activeText, setActiveText] = useState<ToolType>('text')
+
+  // Zoom presets dropdown
+  const [zoomDropdownOpen, setZoomDropdownOpen] = useState(false)
 
   // Straight-line mode
   const [straightLineMode, setStraightLineMode] = useState(false)
@@ -1436,13 +1466,19 @@ export default function PdfAnnotateTool() {
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null)
   const annCanvasRef = useRef<HTMLCanvasElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const innerRef = useRef<HTMLDivElement>(null)
+  const zoomRef = useRef(zoom)
+  const panRef = useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null)
+  const spaceHeldRef = useRef(false)
   const shapesDropdownRef = useRef<HTMLDivElement>(null)
   const textDropdownRef = useRef<HTMLDivElement>(null)
+  const zoomDropdownRef = useRef<HTMLDivElement>(null)
   const isDrawingRef = useRef(false)
   const currentPtsRef = useRef<Point[]>([])
   const pageDimsRef = useRef({ width: 0, height: 0 })
   const pdfFileRef = useRef(pdfFile)
   pdfFileRef.current = pdfFile
+  useEffect(() => { zoomRef.current = zoom }, [zoom])
 
   // Text highlight
   const textItemsCacheRef = useRef<Record<string, { text: string; x: number; y: number; width: number; height: number; page: number }[]>>({})
@@ -1550,6 +1586,24 @@ export default function PdfAnnotateTool() {
 
     // Draw eraser-added fragments
     for (const frag of mods.added) drawAnnotation(ctx, frag, RENDER_SCALE)
+
+    // Hover highlight (dashed blue outline)
+    if (hoveredAnnId && hoveredAnnId !== selectedAnnId) {
+      const hovAnn = pageAnns.find(a => a.id === hoveredAnnId)
+      if (hovAnn) {
+        const bounds = getAnnotationBounds(hovAnn)
+        if (bounds) {
+          ctx.save()
+          ctx.strokeStyle = '#3B82F6'
+          ctx.lineWidth = 1
+          ctx.globalAlpha = 0.4
+          ctx.setLineDash([3, 3])
+          ctx.strokeRect(bounds.x * RENDER_SCALE, bounds.y * RENDER_SCALE, bounds.w * RENDER_SCALE, bounds.h * RENDER_SCALE)
+          ctx.setLineDash([])
+          ctx.restore()
+        }
+      }
+    }
 
     // In-progress stroke
     if (isDrawingRef.current && activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'cloud' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough') {
@@ -1733,7 +1787,7 @@ export default function PdfAnnotateTool() {
       }
       drawMeasurement(ctx, preview, RENDER_SCALE, calibration, false)
     }
-  }, [annotations, currentPage, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar])
+  }, [annotations, currentPage, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId])
 
   // ── History management ───────────────────────────────
 
@@ -1935,6 +1989,10 @@ export default function PdfAnnotateTool() {
   const handleFiles = useCallback(async (files: File[]) => {
     const file = files[0]
     if (!file) return
+    // Warn if there are unsaved annotations
+    if (Object.values(annotations).some(a => a.length > 0)) {
+      if (!confirm('You have unsaved annotations. Load a new PDF and discard them?')) return
+    }
     setLoadError(null)
     try {
       const pdf = await loadPDFFile(file)
@@ -1963,7 +2021,18 @@ export default function PdfAnnotateTool() {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       setLoadError(`Failed to load PDF: ${msg}`)
     }
-  }, [])
+  }, [annotations])
+
+  // ── Warn before closing with unsaved annotations ────
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (Object.values(annotations).some(a => a.length > 0)) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [annotations])
 
   // ── Thumbnail loading ────────────────────────────────
 
@@ -2004,7 +2073,25 @@ export default function PdfAnnotateTool() {
   // ── Re-render annotations ────────────────────────────
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { redraw() }, [pdfReady, annotations, selectedAnnId, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar])
+  useEffect(() => { redraw() }, [pdfReady, annotations, selectedAnnId, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId])
+
+  // ── Zoom at viewport center ─────────────────────────
+
+  const zoomAtCenter = useCallback((newZoom: number) => {
+    const el = scrollRef.current
+    if (!el) { setZoom(newZoom); return }
+    const oldZoom = zoomRef.current
+    if (newZoom === oldZoom) return
+    const centerX = el.clientWidth / 2
+    const centerY = el.clientHeight / 2
+    const contentX = (el.scrollLeft + centerX) / oldZoom
+    const contentY = (el.scrollTop + centerY) / oldZoom
+    setZoom(newZoom)
+    requestAnimationFrame(() => {
+      el.scrollLeft = contentX * newZoom - centerX
+      el.scrollTop = contentY * newZoom - centerY
+    })
+  }, [])
 
   // ── Keyboard shortcuts ───────────────────────────────
 
@@ -2111,6 +2198,7 @@ export default function PdfAnnotateTool() {
           removeAnnotation(selectedAnnId)
           setSelectedAnnId(null)
           setSelectedArrowIdx(null)
+          addToast({ type: 'info', message: 'Annotation deleted' })
           return
         }
       }
@@ -2188,12 +2276,12 @@ export default function PdfAnnotateTool() {
       // ── Zoom shortcuts ──
       if (mod && (e.key === '=' || e.key === '+')) {
         e.preventDefault()
-        setZoom(z => Math.round(Math.min(4.0, z + 0.25) * 100) / 100)
+        zoomAtCenter(Math.round(Math.min(4.0, zoomRef.current + 0.25) * 100) / 100)
         return
       }
       if (mod && e.key === '-') {
         e.preventDefault()
-        setZoom(z => Math.round(Math.max(0.25, z - 0.25) * 100) / 100)
+        zoomAtCenter(Math.round(Math.max(0.25, zoomRef.current - 0.25) * 100) / 100)
         return
       }
       if (mod && e.key === '0') {
@@ -2230,6 +2318,65 @@ export default function PdfAnnotateTool() {
         return
       }
 
+      // ── Space: temporary pan mode ──
+      if (e.key === ' ' && !e.repeat) {
+        e.preventDefault()
+        spaceHeldRef.current = true
+        setCanvasCursor('grab')
+        return
+      }
+
+      // ── Ctrl+]: Bring to front ──
+      if (mod && e.key === ']' && selectedAnnId) {
+        e.preventDefault()
+        const page = annotations[currentPage] || []
+        const idx = page.findIndex(a => a.id === selectedAnnId)
+        if (idx >= 0 && idx < page.length - 1) {
+          const next = [...page]
+          const [item] = next.splice(idx, 1)
+          next.push(item)
+          const result = { ...annotations, [currentPage]: next }
+          setAnnotations(result)
+          pushHistory(result)
+        }
+        return
+      }
+
+      // ── Ctrl+[: Send to back ──
+      if (mod && e.key === '[' && selectedAnnId) {
+        e.preventDefault()
+        const page = annotations[currentPage] || []
+        const idx = page.findIndex(a => a.id === selectedAnnId)
+        if (idx > 0) {
+          const next = [...page]
+          const [item] = next.splice(idx, 1)
+          next.unshift(item)
+          const result = { ...annotations, [currentPage]: next }
+          setAnnotations(result)
+          pushHistory(result)
+        }
+        return
+      }
+
+      // ── F: Fit to page ──
+      if (!mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        fitToWindow()
+        return
+      }
+
+      // ── +/-: Zoom without modifier (10% steps) ──
+      if (!mod && !e.shiftKey && !e.altKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault()
+        zoomAtCenter(Math.round(Math.min(4.0, zoomRef.current + 0.1) * 100) / 100)
+        return
+      }
+      if (!mod && !e.shiftKey && !e.altKey && e.key === '-') {
+        e.preventDefault()
+        zoomAtCenter(Math.round(Math.max(0.25, zoomRef.current - 0.1) * 100) / 100)
+        return
+      }
+
       // ── Single-letter tool switching (no modifier) ──
       if (!mod && !e.shiftKey && !e.altKey) {
         const toolMap: Record<string, ToolType> = {
@@ -2247,12 +2394,20 @@ export default function PdfAnnotateTool() {
         }
       }
     }
+    const keyUpHandler = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        spaceHeldRef.current = false
+        panRef.current = null
+        setCanvasCursor(null)
+      }
+    }
     window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    window.addEventListener('keyup', keyUpHandler)
+    return () => { window.removeEventListener('keydown', handler); window.removeEventListener('keyup', keyUpHandler) }
   }, [undo, redo, selectedAnnId, editingTextId, removeAnnotation, activeTool, selectedMeasureId,
-      redraw, annotations, currentPage, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage, selectTextToolbar])
+      redraw, annotations, currentPage, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage, selectTextToolbar, zoomAtCenter, pushHistory, addToast])
 
-  // ── Zoom with scroll wheel ───────────────────────────
+  // ── Zoom with scroll wheel (cursor-position) ────────
 
   useEffect(() => {
     const el = scrollRef.current
@@ -2260,13 +2415,56 @@ export default function PdfAnnotateTool() {
     const handler = (e: WheelEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return
       e.preventDefault()
-      setZoom(prev => {
-        const delta = e.deltaY > 0 ? -0.1 : 0.1
-        return Math.round(Math.max(0.25, Math.min(4.0, prev + delta)) * 100) / 100
+      const oldZoom = zoomRef.current
+      const delta = e.deltaY > 0 ? -0.1 : 0.1
+      const newZoom = Math.round(Math.max(0.25, Math.min(4.0, oldZoom + delta)) * 100) / 100
+      if (newZoom === oldZoom) return
+      const rect = el.getBoundingClientRect()
+      const cursorX = e.clientX - rect.left
+      const cursorY = e.clientY - rect.top
+      const contentX = (el.scrollLeft + cursorX) / oldZoom
+      const contentY = (el.scrollTop + cursorY) / oldZoom
+      setZoom(newZoom)
+      requestAnimationFrame(() => {
+        el.scrollLeft = contentX * newZoom - cursorX
+        el.scrollTop = contentY * newZoom - cursorY
       })
     }
     el.addEventListener('wheel', handler, { passive: false })
     return () => el.removeEventListener('wheel', handler)
+  }, [])
+
+  // ── Middle-mouse pan ────────────────────────────────
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 1) return
+      e.preventDefault()
+      panRef.current = { startX: e.clientX, startY: e.clientY, scrollLeft: el.scrollLeft, scrollTop: el.scrollTop }
+      el.style.cursor = 'grabbing'
+    }
+    const onMove = (e: PointerEvent) => {
+      if (!panRef.current) return
+      el.scrollLeft = panRef.current.scrollLeft - (e.clientX - panRef.current.startX)
+      el.scrollTop = panRef.current.scrollTop - (e.clientY - panRef.current.startY)
+    }
+    const onUp = () => {
+      if (!panRef.current) return
+      panRef.current = null
+      el.style.cursor = ''
+    }
+    el.addEventListener('pointerdown', onDown)
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('pointercancel', onUp)
+    return () => {
+      el.removeEventListener('pointerdown', onDown)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('pointercancel', onUp)
+    }
   }, [])
 
   // ── Clear in-progress when tool changes ──────────────
@@ -2330,6 +2528,19 @@ export default function PdfAnnotateTool() {
     return () => document.removeEventListener('pointerdown', handler)
   }, [textDropdownOpen])
 
+  // ── Close zoom dropdown on outside click ──────────────
+
+  useEffect(() => {
+    if (!zoomDropdownOpen) return
+    const handler = (e: PointerEvent) => {
+      if (zoomDropdownRef.current && !zoomDropdownRef.current.contains(e.target as Node)) {
+        setZoomDropdownOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', handler)
+    return () => document.removeEventListener('pointerdown', handler)
+  }, [zoomDropdownOpen])
+
   // ── Cache text items for text highlight ───────────────
 
   useEffect(() => {
@@ -2369,6 +2580,15 @@ export default function PdfAnnotateTool() {
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
+    // Space-to-pan: start panning instead of tool action
+    if (spaceHeldRef.current) {
+      const el = scrollRef.current
+      if (el) {
+        panRef.current = { startX: e.clientX, startY: e.clientY, scrollLeft: el.scrollLeft, scrollTop: el.scrollTop }
+        setCanvasCursor('grabbing')
+      }
+      return
+    }
     e.currentTarget.setPointerCapture(e.pointerId)
     const pt = getPoint(e)
 
@@ -2477,7 +2697,27 @@ export default function PdfAnnotateTool() {
       // Hit-test all annotations
       const hitAnn = findAnnotationAt(pt)
       if (hitAnn) {
+        // Single-click on already-selected text/callout → enter edit mode
+        if (hitAnn.id === selectedAnnId && (hitAnn.type === 'text' || hitAnn.type === 'callout')) {
+          enterEditMode(hitAnn.id)
+          return
+        }
         setSelectedAnnId(hitAnn.id)
+        // Sync properties bar to selected annotation
+        setColor(hitAnn.color)
+        setStrokeWidth(hitAnn.strokeWidth)
+        setOpacity(Math.round(hitAnn.opacity * 100))
+        if (hitAnn.type === 'text' || hitAnn.type === 'callout') {
+          setFontFamily(hitAnn.fontFamily || 'Arial')
+          setFontSize(hitAnn.fontSize || 16)
+          setBold(hitAnn.bold || false)
+          setItalic(hitAnn.italic || false)
+          setUnderline(hitAnn.underline || false)
+          setStrikethrough(hitAnn.strikethrough || false)
+          setTextBgColor(hitAnn.backgroundColor || null)
+          setLineSpacing(hitAnn.lineHeight || 1.3)
+          setTextAlign(hitAnn.textAlign || 'left')
+        }
         // Double-click text/callout -> edit mode
         if ((hitAnn.type === 'text' || hitAnn.type === 'callout') && isDoubleClick) {
           enterEditMode(hitAnn.id)
@@ -2702,9 +2942,20 @@ export default function PdfAnnotateTool() {
       const hitAny = findAnnotationAt(pt)
       if (hitAny) {
         setSelectedAnnId(hitAny.id)
-        // Sync color picker to selected text/callout annotation's color
+        // Sync properties bar to selected annotation
+        setColor(hitAny.color)
+        setStrokeWidth(hitAny.strokeWidth)
+        setOpacity(Math.round(hitAny.opacity * 100))
         if (hitAny.type === 'text' || hitAny.type === 'callout') {
-          setColor(hitAny.color)
+          setFontFamily(hitAny.fontFamily || 'Arial')
+          setFontSize(hitAny.fontSize || 16)
+          setBold(hitAny.bold || false)
+          setItalic(hitAny.italic || false)
+          setUnderline(hitAny.underline || false)
+          setStrikethrough(hitAny.strikethrough || false)
+          setTextBgColor(hitAny.backgroundColor || null)
+          setLineSpacing(hitAny.lineHeight || 1.3)
+          setTextAlign(hitAny.textAlign || 'left')
         }
         // Double-click text/callout → edit mode
         if ((hitAny.type === 'text' || hitAny.type === 'callout') && isDoubleClick) {
@@ -2765,6 +3016,15 @@ export default function PdfAnnotateTool() {
       eraserRadius, eraserMode, zoom, color, strokeWidth, fontSize, opacity, fontFamily, bold, italic, underline, textAlign])
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    // Space-to-pan: scroll viewport
+    if (spaceHeldRef.current && panRef.current) {
+      const el = scrollRef.current
+      if (el) {
+        el.scrollLeft = panRef.current.scrollLeft - (e.clientX - panRef.current.startX)
+        el.scrollTop = panRef.current.scrollTop - (e.clientY - panRef.current.startY)
+      }
+      return
+    }
     // Eraser cursor
     if (activeTool === 'eraser' && annCanvasRef.current) {
       const rect = annCanvasRef.current.getBoundingClientRect()
@@ -2813,6 +3073,7 @@ export default function PdfAnnotateTool() {
       }
       // 2. Check if hovering over any annotation
       const hoveredAnn = findAnnotationAt(hoverPt)
+      setHoveredAnnId(hoveredAnn?.id ?? null)
       if (hoveredAnn) { setCanvasCursor('move'); return }
       // 3. Check if hovering over embedded PDF text → I-beam
       const cacheKey = `${currentPage}_${currentRotation}`
@@ -2869,6 +3130,13 @@ export default function PdfAnnotateTool() {
           case 's': newH = Math.max(20, origHeight + dy); break
           case 'e': newW = Math.max(40, origWidth + dx); break
           case 'w': newX = origPoints[0].x + dx; newW = Math.max(40, origWidth - dx); break
+        }
+        // Auto-height for text/callout: recompute height based on content reflow
+        if (selectedAnnId) {
+          const ann = (annotations[currentPage] || []).find(a => a.id === selectedAnnId)
+          if (ann && (ann.type === 'text' || ann.type === 'callout') && ann.text) {
+            newH = computeTextBoxHeight({ ...ann, width: newW })
+          }
         }
         setAnnotations(prev => ({
           ...prev,
@@ -2982,6 +3250,13 @@ export default function PdfAnnotateTool() {
           case 's': newH = Math.max(20, origHeight + dy); break
           case 'e': newW = Math.max(40, origWidth + dx); break
           case 'w': newX = origPoints[0].x + dx; newW = Math.max(40, origWidth - dx); break
+        }
+        // Auto-height for text annotations
+        if (selectedAnnId) {
+          const ann = (annotations[currentPage] || []).find(a => a.id === selectedAnnId)
+          if (ann && ann.type === 'text' && ann.text) {
+            newH = computeTextBoxHeight({ ...ann, width: newW })
+          }
         }
 
         setAnnotations(prev => ({
@@ -3650,6 +3925,7 @@ export default function PdfAnnotateTool() {
       })
       if (pickerResult === 'cancelled') return
       if (pickerResult === 'fallback') downloadBlob(blob, fileName)
+      addToast({ type: 'success', message: 'PDF exported' })
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       setExportError(`Export failed: ${msg}`)
@@ -3724,475 +4000,227 @@ export default function PdfAnnotateTool() {
   // Get the editing text annotation for textarea overlay
   const editingAnn = editingTextId ? getAnnotation(editingTextId) : null
   const selectedAnn = selectedAnnId ? getAnnotation(selectedAnnId) : null
-  const isTextAnnSelected = activeTool === 'select' && selectedAnn && (selectedAnn.type === 'text' || selectedAnn.type === 'callout')
+  const isTextAnnSelected = selectedAnn && (selectedAnn.type === 'text' || selectedAnn.type === 'callout')
+  const isShapeAnnSelected = selectedAnn && !isTextAnnSelected
+
+  // Properties bar context
+  const showPropsForTool = activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure'
+  const showPropsForSelection = activeTool === 'select' && selectedAnn
+  const showTextProps = (isTextAnnSelected && activeTool === 'select') || activeTool === 'text' || activeTool === 'callout'
+  const showStrokeWidth = (isShapeAnnSelected && activeTool === 'select') ||
+    (activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough')
+  const showOpacity = showPropsForTool || (activeTool === 'select' && selectedAnn != null)
+  const showColorPicker = showPropsForTool || showPropsForSelection
+  const showEraserControls = activeTool === 'eraser'
+  const showMeasureControls = activeTool === 'measure'
 
   return (
     <div className="h-full flex flex-col">
-      {/* ── Toolbar ─────────────────────────────── */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.06] flex-shrink-0 flex-wrap">
-        {/* ── Pages group ── */}
+      {/* ── Top Row: Tool Selection + View Actions ── */}
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-white/[0.06] flex-shrink-0">
+        {/* Sidebar toggle */}
         {pdfFile.pageCount > 1 && (
           <>
-            <div className="flex flex-col items-center gap-0.5">
-              <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Pages</span>
-              <div className="flex items-center gap-0.5">
-                <button onClick={() => setSidebarOpen(o => !o)} title="Page thumbnails" aria-label="Toggle page thumbnails"
-                  className={`p-1.5 rounded-md transition-colors ${
-                    sidebarOpen ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-                  }`}>
-                  <PanelLeft size={16} />
-                </button>
-              </div>
-            </div>
-            <div className="w-px h-8 bg-white/[0.08]" />
+            <button onClick={() => setSidebarOpen(o => !o)} title="Page thumbnails" aria-label="Toggle page thumbnails"
+              className={`p-1.5 rounded-lg transition-colors ${
+                sidebarOpen ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+              }`}>
+              <PanelLeft size={16} />
+            </button>
+            <div className="w-px h-6 bg-white/[0.08]" />
           </>
         )}
 
-        {/* ── Select tool ── */}
-        <div className="flex flex-col items-center gap-0.5">
-          <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Select</span>
-          <button onClick={() => setActiveTool('select')} title="Select (S)"
-            className={`p-1.5 rounded-md transition-colors ${
-              activeTool === 'select' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
+        {/* Select */}
+        <button onClick={() => setActiveTool('select')} title="Select (S)"
+          className={`p-1.5 rounded-lg transition-colors ${
+            activeTool === 'select' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+          }`}>
+          <MousePointer2 size={16} />
+        </button>
+        <div className="w-px h-6 bg-white/[0.08]" />
+
+        {/* Shapes dropdown */}
+        <div ref={shapesDropdownRef} className="relative">
+          <button
+            onClick={() => { if (!isDrawTool) setActiveTool(activeDraw); setShapesDropdownOpen(o => !o) }}
+            title={activeDrawDef.label}
+            className={`p-1.5 rounded-lg flex items-center gap-0.5 transition-colors ${
+              isDrawTool ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
             }`}>
-            <MousePointer2 size={16} />
+            <ActiveDrawIcon size={16} />
+            <ChevronDown size={10} className="opacity-50" />
           </button>
-        </div>
-        <div className="w-px h-8 bg-white/[0.08]" />
-
-        {/* ── Draw group ── */}
-        <div className="flex flex-col items-center gap-0.5">
-          <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Draw</span>
-          <div className="flex items-center gap-0.5">
-            {/* Shapes dropdown */}
-            <div ref={shapesDropdownRef} className="relative">
-              <button
-                onClick={() => { if (!isDrawTool) setActiveTool(activeDraw); setShapesDropdownOpen(o => !o) }}
-                title={activeDrawDef.label}
-                aria-label={`Drawing tool: ${activeDrawDef.label}`}
-                className={`p-1.5 rounded-md flex items-center gap-0.5 transition-colors ${
-                  isDrawTool ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-                }`}>
-                <ActiveDrawIcon size={16} />
-                <ChevronDown size={10} className="opacity-50" />
-              </button>
-              {shapesDropdownOpen && (
-                <div className="absolute top-full left-0 mt-1 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
-                  {DRAW_TOOLS.map(s => (
-                    <button key={s.type}
-                      onClick={() => { setActiveTool(s.type); setActiveDraw(s.type); setShapesDropdownOpen(false) }}
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                        activeTool === s.type ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
-                      }`}>
-                      <s.icon size={14} />
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Highlight button — instant apply if text selected, otherwise freehand tool */}
-            <button
-              onClick={() => {
-                if (selectTextToolbar) {
-                  const ann: Annotation = {
-                    id: genId(), type: 'highlighter',
-                    points: [{ x: 0, y: 0 }], color: '#FFFF00', strokeWidth: 0,
-                    opacity: 0.4, fontSize, rects: [...selectTextToolbar.rects],
-                  }
-                  commitAnnotation(ann)
-                  setSelectTextToolbar(null)
-                  redraw()
-                } else {
-                  setActiveTool('highlighter')
-                  setActiveHighlight('highlighter')
-                }
-              }}
-              title="Highlight (H)"
-              className={`p-1.5 rounded-md transition-colors ${
-                activeTool === 'highlighter' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-              }`}>
-              <Highlighter size={16} />
-            </button>
-
-            {/* Strikethrough button — instant apply if text selected, otherwise strikethrough tool */}
-            <button
-              onClick={() => {
-                if (selectTextToolbar) {
-                  const ann: Annotation = {
-                    id: genId(), type: 'highlighter',
-                    points: [{ x: 0, y: 0 }], color: '#FF0000', strokeWidth: 0,
-                    opacity: 1, fontSize, rects: [...selectTextToolbar.rects],
-                    strikethrough: true,
-                  }
-                  commitAnnotation(ann)
-                  setSelectTextToolbar(null)
-                  redraw()
-                } else {
-                  setActiveTool('textStrikethrough')
-                  setActiveHighlight('textStrikethrough')
-                }
-              }}
-              title="Strikethrough (Shift+X)"
-              className={`p-1.5 rounded-md transition-colors ${
-                activeTool === 'textStrikethrough' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-              }`}>
-              <Strikethrough size={16} />
-            </button>
-
-            {/* Text tools dropdown */}
-            <div ref={textDropdownRef} className="relative">
-              <button
-                onClick={() => { if (!isTextTool) setActiveTool(activeText); setTextDropdownOpen(o => !o) }}
-                title={activeTextDef.label}
-                aria-label={`Text tool: ${activeTextDef.label}`}
-                className={`p-1.5 rounded-md flex items-center gap-0.5 transition-colors ${
-                  isTextTool ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-                }`}>
-                <ActiveTextIcon size={16} />
-                <ChevronDown size={10} className="opacity-50" />
-              </button>
-              {textDropdownOpen && (
-                <div className="absolute top-full left-0 mt-1 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
-                  {TEXT_TOOLS.map(s => (
-                    <button key={s.type}
-                      onClick={() => { setActiveTool(s.type); setActiveText(s.type); setTextDropdownOpen(false) }}
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                        activeTool === s.type ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
-                      }`}>
-                      <s.icon size={14} />
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Eraser */}
-            <button onClick={() => setActiveTool('eraser')} title="Eraser (E)" aria-label="Eraser"
-              className={`p-1.5 rounded-md transition-colors ${
-                activeTool === 'eraser' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-              }`}>
-              <Eraser size={16} />
-            </button>
-
-            {/* Measure */}
-            <button onClick={() => setActiveTool('measure')} title="Measure (M)" aria-label="Measure"
-              className={`p-1.5 rounded-md transition-colors ${
-                activeTool === 'measure' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.08]'
-              }`}>
-              <Ruler size={16} />
-            </button>
-          </div>
-        </div>
-
-        <div className="w-px h-8 bg-white/[0.08]" />
-
-        {/* ── Style group ── */}
-        <div className="flex flex-col items-center gap-0.5">
-          <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Style</span>
-          <div className="flex items-center gap-1">
-            {/* Color (hidden for select/eraser/measure, but shown when text/callout annotation is selected) */}
-            {(isTextAnnSelected || (activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure')) && (
-              <label className="w-7 h-7 rounded-md border border-white/[0.12] cursor-pointer flex-shrink-0 overflow-hidden"
-                style={{ backgroundColor: color }} aria-label="Annotation color">
-                <input type="color" value={color} onChange={e => {
-                  setColor(e.target.value)
-                  if (isTextAnnSelected && selectedAnnId) updateAnnotation(selectedAnnId, { color: e.target.value })
-                }} className="opacity-0 w-0 h-0" aria-label="Choose annotation color" />
-              </label>
-            )}
-
-            {/* Stroke width */}
-            {activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && (
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-white/40" title="Stroke Width">Width</span>
-                <input type="range" min={1} max={20} value={strokeWidth}
-                  onChange={e => setStrokeWidth(Number(e.target.value))}
-                  className="w-16 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
-                    [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
-                <span className="text-[10px] text-white/40 w-4">{strokeWidth}</span>
-              </div>
-            )}
-
-            {/* Eraser controls */}
-            {activeTool === 'eraser' && (
-              <>
-                <div className="flex items-center bg-white/[0.06] rounded-md p-0.5">
-                  <button onClick={() => setEraserMode('partial')} title="Partial erase — only removes what's under cursor"
-                    className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-                      eraserMode === 'partial' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white'
-                    }`}>Partial</button>
-                  <button onClick={() => setEraserMode('object')} title="Object erase — deletes entire annotation on touch"
-                    className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-                      eraserMode === 'object' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white'
-                    }`}>Object</button>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-white/40">Size</span>
-                  <input type="range" min={5} max={50} value={eraserRadius}
-                    onChange={e => setEraserRadius(Number(e.target.value))}
-                    className="w-16 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
-                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
-                      [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
-                  <span className="text-[10px] text-white/40 w-5">{eraserRadius}</span>
-                </div>
-              </>
-            )}
-
-            {/* Text/Callout: font family, size & formatting */}
-            {(activeTool === 'text' || activeTool === 'callout') && (
-              <>
-                <select value={fontFamily} onChange={e => {
-                  const ff = e.target.value
-                  setFontFamily(ff)
-                  if (editingTextId) updateAnnotation(editingTextId, { fontFamily: ff })
-                  else if (selectedAnnId) {
-                    const ann = getAnnotation(selectedAnnId)
-                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { fontFamily: ff })
-                  }
-                }}
-                  className="px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white max-w-[100px]">
-                  {FONT_FAMILIES.map(ff => (
-                    <option key={ff} value={ff} style={{ fontFamily: ff }}>{ff}</option>
-                  ))}
-                </select>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-white/40" title="Font Size">Size</span>
-                  <select value={[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].includes(fontSize) ? fontSize : ''}
-                    onChange={e => {
-                      const fs = Number(e.target.value)
-                      if (fs) {
-                        setFontSize(fs)
-                        if (editingTextId) updateAnnotation(editingTextId, { fontSize: fs })
-                        else if (selectedAnnId) {
-                          const ann = getAnnotation(selectedAnnId)
-                          if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { fontSize: fs })
-                        }
-                      }
-                    }}
-                    className="w-14 px-0.5 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white">
-                    {[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].map(s => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                    {![8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].includes(fontSize) && (
-                      <option value={fontSize}>{fontSize}</option>
-                    )}
-                  </select>
-                  <input type="number" min={8} max={72} step={0.5} value={fontSize}
-                    onChange={e => {
-                      const fs = Math.max(8, Math.min(72, Number(e.target.value)))
-                      setFontSize(fs)
-                      if (editingTextId) updateAnnotation(editingTextId, { fontSize: fs })
-                      else if (selectedAnnId) {
-                        const ann = getAnnotation(selectedAnnId)
-                        if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { fontSize: fs })
-                      }
-                    }}
-                    className="w-10 px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white text-center" />
-                </div>
-
-                {/* Formatting: Bold, Italic, Underline, Strikethrough */}
-                <div className="flex items-center gap-0.5">
-                  {([
-                    { key: 'bold' as const, Icon: Bold, label: 'Bold (Ctrl+B)', val: bold, set: setBold },
-                    { key: 'italic' as const, Icon: Italic, label: 'Italic (Ctrl+I)', val: italic, set: setItalic },
-                    { key: 'underline' as const, Icon: Underline, label: 'Underline (Ctrl+U)', val: underline, set: setUnderline },
-                    { key: 'strikethrough' as const, Icon: Strikethrough, label: 'Strikethrough (Ctrl+Shift+X)', val: strikethrough, set: setStrikethrough },
-                  ] as const).map(({ key, Icon, label, val, set }) => (
-                    <button key={key} onMouseDown={e => e.preventDefault()} onClick={() => {
-                      const next = !val
-                      set(next)
-                      if (editingTextId) updateAnnotation(editingTextId, { [key]: next })
-                      else if (selectedAnnId) {
-                        const ann = getAnnotation(selectedAnnId)
-                        if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { [key]: next })
-                      }
-                    }} title={label}
-                      className={`p-1 rounded transition-colors ${
-                        val ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
-                      }`}>
-                      <Icon size={13} />
-                    </button>
-                  ))}
-                </div>
-
-                {/* Alignment */}
-                <div className="flex items-center gap-0.5">
-                  {([
-                    { align: 'left' as const, Icon: AlignLeft, label: 'Align Left' },
-                    { align: 'center' as const, Icon: AlignCenter, label: 'Align Center' },
-                    { align: 'right' as const, Icon: AlignRight, label: 'Align Right' },
-                  ] as const).map(({ align, Icon, label }) => (
-                    <button key={align} onMouseDown={e => e.preventDefault()} onClick={() => {
-                      setTextAlign(align)
-                      if (editingTextId) updateAnnotation(editingTextId, { textAlign: align })
-                      else if (selectedAnnId) {
-                        const ann = getAnnotation(selectedAnnId)
-                        if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { textAlign: align })
-                      }
-                    }} title={label}
-                      className={`p-1 rounded transition-colors ${
-                        textAlign === align ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
-                      }`}>
-                      <Icon size={13} />
-                    </button>
-                  ))}
-                </div>
-
-                {/* Text background highlight */}
-                <button onMouseDown={e => e.preventDefault()} onClick={() => {
-                  const next = textBgColor ? null : color
-                  setTextBgColor(next)
-                  if (editingTextId) updateAnnotation(editingTextId, { backgroundColor: next || undefined })
-                  else if (selectedAnnId) {
-                    const ann = getAnnotation(selectedAnnId)
-                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { backgroundColor: next || undefined })
-                  }
-                }} title="Text background highlight"
-                  className={`p-1 rounded transition-colors ${
-                    textBgColor ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+          {shapesDropdownOpen && (
+            <div className="absolute top-full left-0 mt-1 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+              {DRAW_TOOLS.map(s => (
+                <button key={s.type}
+                  onClick={() => { setActiveTool(s.type); setActiveDraw(s.type); setShapesDropdownOpen(false) }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                    activeTool === s.type ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
                   }`}>
-                  <Paintbrush size={13} />
+                  <s.icon size={14} />
+                  {s.label}
                 </button>
+              ))}
+            </div>
+          )}
+        </div>
 
-                {/* Line spacing */}
-                <select value={lineSpacing} onChange={e => {
-                  const lh = parseFloat(e.target.value)
-                  setLineSpacing(lh)
-                  if (editingTextId) updateAnnotation(editingTextId, { lineHeight: lh })
-                  else if (selectedAnnId) {
-                    const ann = getAnnotation(selectedAnnId)
-                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { lineHeight: lh })
-                  }
-                }} title="Line spacing"
-                  className="px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white">
-                  {[1.0, 1.15, 1.3, 1.5, 2.0].map(v => (
-                    <option key={v} value={v}>{v === 1.3 ? '1.3 (default)' : v.toString()}</option>
-                  ))}
-                </select>
-              </>
-            )}
+        {/* Highlight */}
+        <button
+          onClick={() => {
+            if (selectTextToolbar) {
+              const ann: Annotation = {
+                id: genId(), type: 'highlighter',
+                points: [{ x: 0, y: 0 }], color: '#FFFF00', strokeWidth: 0,
+                opacity: 0.4, fontSize, rects: [...selectTextToolbar.rects],
+              }
+              commitAnnotation(ann)
+              setSelectTextToolbar(null)
+              redraw()
+            } else {
+              setActiveTool('highlighter')
+              setActiveHighlight('highlighter')
+            }
+          }}
+          title="Highlight (H)"
+          className={`p-1.5 rounded-lg transition-colors ${
+            activeTool === 'highlighter' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+          }`}>
+          <Highlighter size={16} />
+        </button>
 
-            {/* Measure contextual controls */}
-            {activeTool === 'measure' && (
-              <>
-                {calibration.pixelsPerUnit !== null && (
-                  <span className="text-[10px] text-cyan-400/70">
-                    Scale: {calibration.pixelsPerUnit.toFixed(1)} px/{calibration.unit}
-                  </span>
-                )}
-                {(measurements[currentPage] || []).length > 0 && (
-                  <button
-                    onClick={() => {
-                      setMeasurements(prev => {
-                        const next = { ...prev }
-                        delete next[currentPage]
-                        return next
-                      })
-                      setSelectedMeasureId(null)
-                    }}
-                    className="px-1.5 py-0.5 rounded text-[10px] text-white/40 hover:text-white/60 border border-white/[0.08]"
-                  >
-                    Clear All
-                  </button>
-                )}
-                {calibration.pixelsPerUnit !== null && (
-                  <button
-                    onClick={() => setCalibration({ pixelsPerUnit: null, unit: 'in' })}
-                    className="px-1.5 py-0.5 rounded text-[10px] text-white/40 hover:text-white/60 border border-white/[0.08]"
-                  >
-                    Reset Scale
-                  </button>
-                )}
-              </>
-            )}
+        {/* Strikethrough */}
+        <button
+          onClick={() => {
+            if (selectTextToolbar) {
+              const ann: Annotation = {
+                id: genId(), type: 'highlighter',
+                points: [{ x: 0, y: 0 }], color: '#FF0000', strokeWidth: 0,
+                opacity: 1, fontSize, rects: [...selectTextToolbar.rects],
+                strikethrough: true,
+              }
+              commitAnnotation(ann)
+              setSelectTextToolbar(null)
+              redraw()
+            } else {
+              setActiveTool('textStrikethrough')
+              setActiveHighlight('textStrikethrough')
+            }
+          }}
+          title="Strikethrough (Shift+X)"
+          className={`p-1.5 rounded-lg transition-colors ${
+            activeTool === 'textStrikethrough' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+          }`}>
+          <Strikethrough size={16} />
+        </button>
 
-            {/* Opacity (not for select, highlighter, eraser, or measure) */}
-            {activeTool !== 'select' && activeTool !== 'highlighter' && activeTool !== 'eraser' && activeTool !== 'measure' && (
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-white/40" title="Opacity">Opacity</span>
-                <input type="range" min={10} max={100} step={5} value={opacity}
-                  onChange={e => setOpacity(Number(e.target.value))}
-                  className="w-14 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
-                    [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
-                <span className="text-[10px] text-white/40 w-6">{opacity}%</span>
-              </div>
-            )}
+        {/* Text tools dropdown */}
+        <div ref={textDropdownRef} className="relative">
+          <button
+            onClick={() => { if (!isTextTool) setActiveTool(activeText); setTextDropdownOpen(o => !o) }}
+            title={activeTextDef.label}
+            className={`p-1.5 rounded-lg flex items-center gap-0.5 transition-colors ${
+              isTextTool ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+            }`}>
+            <ActiveTextIcon size={16} />
+            <ChevronDown size={10} className="opacity-50" />
+          </button>
+          {textDropdownOpen && (
+            <div className="absolute top-full left-0 mt-1 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+              {TEXT_TOOLS.map(s => (
+                <button key={s.type}
+                  onClick={() => { setActiveTool(s.type); setActiveText(s.type); setTextDropdownOpen(false) }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                    activeTool === s.type ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
+                  }`}>
+                  <s.icon size={14} />
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
-            {/* Straight-line mode toggle */}
-            {(activeTool === 'pencil' || activeTool === 'highlighter') && (
-              <button onClick={() => setStraightLineMode(m => !m)}
-                title={straightLineMode ? 'Straight line mode (click for freehand)' : 'Freehand mode (click for straight)'}
-                className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  straightLineMode
-                    ? 'bg-[#F47B20]/20 text-[#F47B20] border border-[#F47B20]/30'
-                    : 'text-white/40 hover:text-white/60 border border-white/[0.08]'
-                }`}>
-                {straightLineMode ? 'Straight' : 'Free'}
+        {/* Eraser */}
+        <button onClick={() => setActiveTool('eraser')} title="Eraser (E)"
+          className={`p-1.5 rounded-lg transition-colors ${
+            activeTool === 'eraser' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+          }`}>
+          <Eraser size={16} />
+        </button>
+
+        {/* Measure */}
+        <button onClick={() => setActiveTool('measure')} title="Measure (M)"
+          className={`p-1.5 rounded-lg transition-colors ${
+            activeTool === 'measure' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+          }`}>
+          <Ruler size={16} />
+        </button>
+
+        <div className="w-px h-6 bg-white/[0.08]" />
+
+        {/* Undo/Redo */}
+        <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)"
+          className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none">
+          <Undo2 size={16} />
+        </button>
+        <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)"
+          className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none">
+          <Redo2 size={16} />
+        </button>
+
+        <div className="w-px h-6 bg-white/[0.08]" />
+
+        {/* Rotate */}
+        <button onClick={() => rotatePage(-90)} title="Rotate CCW"
+          className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06]">
+          <RotateCcw size={16} />
+        </button>
+        <button onClick={() => rotatePage(90)} title="Rotate CW"
+          className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06]">
+          <RotateCw size={16} />
+        </button>
+
+        <div className="w-px h-6 bg-white/[0.08]" />
+
+        {/* Zoom */}
+        <button onClick={() => zoomAtCenter(Math.round(Math.max(0.25, zoom - 0.25) * 100) / 100)} title="Zoom out"
+          className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06]">
+          <ZoomOut size={16} />
+        </button>
+        <div ref={zoomDropdownRef} className="relative">
+          <button onClick={() => setZoomDropdownOpen(o => !o)} title="Zoom presets"
+            className="text-[11px] text-white/50 hover:text-white w-12 text-center rounded-lg py-1 hover:bg-white/[0.06] transition-colors">
+            {zoomPct}%
+          </button>
+          {zoomDropdownOpen && (
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-lg z-50 py-1 min-w-[120px]">
+              {ZOOM_PRESETS.map(z => (
+                <button key={z} onClick={() => { zoomAtCenter(z); setZoomDropdownOpen(false) }}
+                  className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                    Math.abs(zoom - z) < 0.01 ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
+                  }`}>
+                  {Math.round(z * 100)}%
+                </button>
+              ))}
+              <div className="h-px bg-white/[0.08] my-1" />
+              <button onClick={() => { fitToWindow(); setZoomDropdownOpen(false) }}
+                className="w-full text-left px-3 py-1.5 text-xs text-white/60 hover:text-white hover:bg-white/[0.06]">
+                Fit Page
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
-
-        <div className="w-px h-8 bg-white/[0.08]" />
-
-        {/* ── History group ── */}
-        <div className="flex flex-col items-center gap-0.5">
-          <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">History</span>
-          <div className="flex items-center gap-0.5">
-            <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/[0.08] disabled:opacity-20 disabled:pointer-events-none">
-              <Undo2 size={16} />
-            </button>
-            <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" aria-label="Redo"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/[0.08] disabled:opacity-20 disabled:pointer-events-none">
-              <Redo2 size={16} />
-            </button>
-          </div>
-        </div>
-
-        <div className="w-px h-8 bg-white/[0.08]" />
-
-        {/* ── Rotate group ── */}
-        <div className="flex flex-col items-center gap-0.5">
-          <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Rotate</span>
-          <div className="flex items-center gap-0.5">
-            <button onClick={() => rotatePage(-90)} title="Rotate CCW" aria-label="Rotate counter-clockwise"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/[0.08]">
-              <RotateCcw size={16} />
-            </button>
-            <button onClick={() => rotatePage(90)} title="Rotate CW" aria-label="Rotate clockwise"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/[0.08]">
-              <RotateCw size={16} />
-            </button>
-          </div>
-        </div>
-
-        <div className="w-px h-8 bg-white/[0.08]" />
-
-        {/* ── Zoom group ── */}
-        <div className="flex flex-col items-center gap-0.5">
-          <span className="text-[8px] text-white/25 uppercase tracking-wider leading-none">Zoom</span>
-          <div className="flex items-center gap-0.5">
-            <button onClick={() => setZoom(z => Math.round(Math.max(0.25, z - 0.25) * 100) / 100)} title="Zoom out" aria-label="Zoom out"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/[0.08]">
-              <ZoomOut size={16} />
-            </button>
-            <span className="text-[11px] text-white/50 w-10 text-center">{zoomPct}%</span>
-            <button onClick={() => setZoom(z => Math.round(Math.min(4.0, z + 0.25) * 100) / 100)} title="Zoom in" aria-label="Zoom in"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/[0.08]">
-              <ZoomIn size={16} />
-            </button>
-            <button onClick={fitToWindow} title="Fit to window" aria-label="Fit to window"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/[0.08]">
-              <Maximize size={16} />
-            </button>
-          </div>
-        </div>
+        <button onClick={() => zoomAtCenter(Math.round(Math.min(4.0, zoom + 0.25) * 100) / 100)} title="Zoom in"
+          className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06]">
+          <ZoomIn size={16} />
+        </button>
+        <button onClick={fitToWindow} title="Fit to window (F)"
+          className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06]">
+          <Maximize size={16} />
+        </button>
 
         <div className="flex-1" />
 
@@ -4200,9 +4228,7 @@ export default function PdfAnnotateTool() {
         {exportError && (
           <div className="flex items-center gap-1 px-2 py-1 rounded bg-red-500/10 border border-red-500/20">
             <span className="text-[10px] text-red-400">{exportError}</span>
-            <button onClick={() => setExportError(null)} className="p-0.5 text-red-400/60 hover:text-red-400" aria-label="Dismiss error">
-              <X size={10} />
-            </button>
+            <button onClick={() => setExportError(null)} className="p-0.5 text-red-400/60 hover:text-red-400"><X size={10} /></button>
           </div>
         )}
         <Button size="sm" onClick={handleExport} disabled={isExporting} icon={<Download size={12} />}>
@@ -4211,6 +4237,239 @@ export default function PdfAnnotateTool() {
         <Button variant="ghost" size="sm" onClick={handleReset} icon={<RotateCcw size={12} />}>
           New
         </Button>
+      </div>
+
+      {/* ── Bottom Row: Contextual Properties Bar ── */}
+      <div className="flex items-center gap-2 px-3 py-1 border-b border-white/[0.06] flex-shrink-0 min-h-[32px]">
+        {/* Color picker */}
+        {showColorPicker && (
+          <ColorPicker
+            value={color}
+            onChange={c => {
+              setColor(c)
+              if (selectedAnnId) updateAnnotation(selectedAnnId, { color: c })
+            }}
+            presets={ANN_COLORS}
+          />
+        )}
+
+        {/* Stroke width */}
+        {showStrokeWidth && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-white/40">Width</span>
+            <input type="range" min={1} max={20} value={strokeWidth}
+              onChange={e => {
+                const val = Number(e.target.value)
+                setStrokeWidth(val)
+                if (selectedAnnId && isShapeAnnSelected) updateAnnotation(selectedAnnId, { strokeWidth: val })
+              }}
+              className="w-16 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
+            <span className="text-[10px] text-white/40 w-4">{strokeWidth}</span>
+          </div>
+        )}
+
+        {/* Opacity */}
+        {showOpacity && activeTool !== 'highlighter' && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-white/40">Opacity</span>
+            <input type="range" min={10} max={100} step={5} value={opacity}
+              onChange={e => {
+                const val = Number(e.target.value)
+                setOpacity(val)
+                if (selectedAnnId) updateAnnotation(selectedAnnId, { opacity: val / 100 })
+              }}
+              className="w-14 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
+            <span className="text-[10px] text-white/40 w-6">{opacity}%</span>
+          </div>
+        )}
+
+        {/* Straight-line mode */}
+        {(activeTool === 'pencil' || activeTool === 'highlighter') && (
+          <button onClick={() => setStraightLineMode(m => !m)}
+            title={straightLineMode ? 'Straight line mode' : 'Freehand mode'}
+            className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+              straightLineMode
+                ? 'bg-[#F47B20]/20 text-[#F47B20] border border-[#F47B20]/30'
+                : 'text-white/40 hover:text-white/60 border border-white/[0.08]'
+            }`}>
+            {straightLineMode ? 'Straight' : 'Free'}
+          </button>
+        )}
+
+        {/* Text formatting controls */}
+        {showTextProps && (
+          <>
+            <div className="w-px h-5 bg-white/[0.08]" />
+            <select value={fontFamily} onChange={e => {
+              const ff = e.target.value
+              setFontFamily(ff)
+              if (editingTextId) updateAnnotation(editingTextId, { fontFamily: ff })
+              else if (selectedAnnId) {
+                const ann = getAnnotation(selectedAnnId)
+                if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { fontFamily: ff })
+              }
+            }}
+              className="px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white max-w-[100px]">
+              {FONT_FAMILIES.map(ff => (
+                <option key={ff} value={ff} style={{ fontFamily: ff }}>{ff}</option>
+              ))}
+            </select>
+            <select value={[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].includes(fontSize) ? fontSize : ''}
+              onChange={e => {
+                const fs = Number(e.target.value)
+                if (fs) {
+                  setFontSize(fs)
+                  if (editingTextId) updateAnnotation(editingTextId, { fontSize: fs })
+                  else if (selectedAnnId) {
+                    const ann = getAnnotation(selectedAnnId)
+                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { fontSize: fs })
+                  }
+                }
+              }}
+              className="w-14 px-0.5 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white">
+              {[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+              {![8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72].includes(fontSize) && (
+                <option value={fontSize}>{fontSize}</option>
+              )}
+            </select>
+            <div className="flex items-center gap-0.5">
+              {([
+                { key: 'bold' as const, Icon: Bold, label: 'Bold (Ctrl+B)', val: bold, set: setBold },
+                { key: 'italic' as const, Icon: Italic, label: 'Italic (Ctrl+I)', val: italic, set: setItalic },
+                { key: 'underline' as const, Icon: Underline, label: 'Underline (Ctrl+U)', val: underline, set: setUnderline },
+                { key: 'strikethrough' as const, Icon: Strikethrough, label: 'Strikethrough (Ctrl+Shift+X)', val: strikethrough, set: setStrikethrough },
+              ] as const).map(({ key, Icon, label, val, set }) => (
+                <button key={key} onMouseDown={e => e.preventDefault()} onClick={() => {
+                  const next = !val
+                  set(next)
+                  if (editingTextId) updateAnnotation(editingTextId, { [key]: next })
+                  else if (selectedAnnId) {
+                    const ann = getAnnotation(selectedAnnId)
+                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { [key]: next })
+                  }
+                }} title={label}
+                  className={`p-1 rounded transition-colors ${
+                    val ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+                  }`}>
+                  <Icon size={13} />
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-0.5">
+              {([
+                { align: 'left' as const, Icon: AlignLeft, label: 'Align Left' },
+                { align: 'center' as const, Icon: AlignCenter, label: 'Align Center' },
+                { align: 'right' as const, Icon: AlignRight, label: 'Align Right' },
+              ] as const).map(({ align, Icon, label }) => (
+                <button key={align} onMouseDown={e => e.preventDefault()} onClick={() => {
+                  setTextAlign(align)
+                  if (editingTextId) updateAnnotation(editingTextId, { textAlign: align })
+                  else if (selectedAnnId) {
+                    const ann = getAnnotation(selectedAnnId)
+                    if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { textAlign: align })
+                  }
+                }} title={label}
+                  className={`p-1 rounded transition-colors ${
+                    textAlign === align ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+                  }`}>
+                  <Icon size={13} />
+                </button>
+              ))}
+            </div>
+            <button onMouseDown={e => e.preventDefault()} onClick={() => {
+              const next = textBgColor ? null : color
+              setTextBgColor(next)
+              if (editingTextId) updateAnnotation(editingTextId, { backgroundColor: next || undefined })
+              else if (selectedAnnId) {
+                const ann = getAnnotation(selectedAnnId)
+                if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { backgroundColor: next || undefined })
+              }
+            }} title="Text background highlight"
+              className={`p-1 rounded transition-colors ${
+                textBgColor ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+              }`}>
+              <Paintbrush size={13} />
+            </button>
+            <select value={lineSpacing} onChange={e => {
+              const lh = parseFloat(e.target.value)
+              setLineSpacing(lh)
+              if (editingTextId) updateAnnotation(editingTextId, { lineHeight: lh })
+              else if (selectedAnnId) {
+                const ann = getAnnotation(selectedAnnId)
+                if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { lineHeight: lh })
+              }
+            }} title="Line spacing"
+              className="px-1 py-0.5 text-[10px] bg-dark-surface border border-white/[0.1] rounded text-white">
+              {[1.0, 1.15, 1.3, 1.5, 2.0].map(v => (
+                <option key={v} value={v}>{v === 1.3 ? '1.3 (default)' : v.toString()}</option>
+              ))}
+            </select>
+          </>
+        )}
+
+        {/* Eraser controls */}
+        {showEraserControls && (
+          <>
+            <div className="flex items-center bg-white/[0.06] rounded-md p-0.5">
+              <button onClick={() => setEraserMode('partial')} title="Partial erase"
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                  eraserMode === 'partial' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white'
+                }`}>Partial</button>
+              <button onClick={() => setEraserMode('object')} title="Object erase"
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                  eraserMode === 'object' ? 'bg-[#F47B20] text-white' : 'text-white/50 hover:text-white'
+                }`}>Object</button>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-white/40">Size</span>
+              <input type="range" min={5} max={50} value={eraserRadius}
+                onChange={e => setEraserRadius(Number(e.target.value))}
+                className="w-16 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
+              <span className="text-[10px] text-white/40 w-5">{eraserRadius}</span>
+            </div>
+          </>
+        )}
+
+        {/* Measure controls */}
+        {showMeasureControls && (
+          <>
+            {calibration.pixelsPerUnit !== null && (
+              <span className="text-[10px] text-cyan-400/70">
+                Scale: {calibration.pixelsPerUnit.toFixed(1)} px/{calibration.unit}
+              </span>
+            )}
+            {(measurements[currentPage] || []).length > 0 && (
+              <button
+                onClick={() => {
+                  setMeasurements(prev => { const next = { ...prev }; delete next[currentPage]; return next })
+                  setSelectedMeasureId(null)
+                }}
+                className="px-1.5 py-0.5 rounded text-[10px] text-white/40 hover:text-white/60 border border-white/[0.08]">
+                Clear All
+              </button>
+            )}
+            {calibration.pixelsPerUnit !== null && (
+              <button
+                onClick={() => setCalibration({ pixelsPerUnit: null, unit: 'in' })}
+                className="px-1.5 py-0.5 rounded text-[10px] text-white/40 hover:text-white/60 border border-white/[0.08]">
+                Reset Scale
+              </button>
+            )}
+          </>
+        )}
+
+        {/* Select hint */}
+        {activeTool === 'select' && !selectedAnn && (
+          <span className="text-[10px] text-white/25 italic">Click to select annotations</span>
+        )}
       </div>
 
       {/* ── Content: sidebar + canvas ──────────────── */}
@@ -4241,7 +4500,7 @@ export default function PdfAnnotateTool() {
 
         {/* ── Canvas area ─────────────────────────── */}
         <div ref={scrollRef} className="flex-1 overflow-auto p-6 bg-black/20 relative group/canvas">
-          <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', margin: '0 auto' }} className="relative w-fit">
+          <div ref={innerRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0' }} className="relative w-fit">
             <canvas ref={pdfCanvasRef} className="block" />
             <canvas
               ref={annCanvasRef}
@@ -4415,7 +4674,7 @@ export default function PdfAnnotateTool() {
               title="Copy text"
               onClick={() => {
                 const text = selectTextToolbar.items.map(i => i.text).join(' ')
-                navigator.clipboard.writeText(text).catch(() => {})
+                navigator.clipboard.writeText(text).then(() => addToast({ type: 'success', message: 'Copied to clipboard' })).catch(() => {})
                 setSelectTextToolbar(null)
                 redraw()
               }}
@@ -4427,59 +4686,64 @@ export default function PdfAnnotateTool() {
         )
       })()}
 
-      {/* ── Page navigation footer ─────────────────── */}
-      <div className="flex items-center justify-center gap-3 px-3 py-2 border-t border-white/[0.06] flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-white/40 truncate max-w-[200px]">{pdfFile.name}</span>
-          <span className="text-[10px] text-white/25">{formatFileSize(pdfFile.size)}</span>
-          {currentRotation !== 0 && (
-            <span className="text-[10px] text-white/25">{currentRotation}°</span>
+      {/* ── Compact status bar ────────────────────── */}
+      <div className="grid grid-cols-3 items-center px-3 py-1.5 border-t border-white/[0.06] flex-shrink-0">
+        {/* Left: file info */}
+        <div className="flex items-center gap-1.5 text-[10px] text-white/30 min-w-0">
+          <span className="truncate max-w-[160px]">{pdfFile.name}</span>
+          <span>{formatFileSize(pdfFile.size)}</span>
+          {currentRotation !== 0 && <span>{currentRotation}°</span>}
+        </div>
+
+        {/* Center: page nav */}
+        <div className="flex items-center justify-center gap-1">
+          {pdfFile.pageCount > 1 ? (
+            <>
+              <button onClick={() => navigateToPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
+                className="p-0.5 text-white/40 hover:text-white disabled:opacity-30 rounded hover:bg-white/[0.06]">
+                <ChevronLeft size={14} />
+              </button>
+              <span className="text-[11px] text-white/50 flex items-center gap-0.5">
+                <input
+                  type="number"
+                  min={1}
+                  max={pdfFile.pageCount}
+                  value={currentPage}
+                  onChange={e => {
+                    const val = parseInt(e.target.value)
+                    if (!isNaN(val) && val >= 1 && val <= pdfFile.pageCount) navigateToPage(val)
+                  }}
+                  className="w-8 px-0.5 py-0 text-[11px] text-center text-white/50 bg-transparent border border-white/[0.1] rounded focus:border-[#F47B20]/50 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+                <span>/ {pdfFile.pageCount}</span>
+              </span>
+              <button onClick={() => navigateToPage(p => Math.min(pdfFile.pageCount, p + 1))} disabled={currentPage === pdfFile.pageCount}
+                className="p-0.5 text-white/40 hover:text-white disabled:opacity-30 rounded hover:bg-white/[0.06]">
+                <ChevronRight size={14} />
+              </button>
+            </>
+          ) : (
+            <span className="text-[10px] text-white/30">1 page</span>
           )}
         </div>
-        <div className="flex-1" />
-        {pdfFile.pageCount > 1 && (
-          <div className="flex items-center gap-2">
-            <button onClick={() => navigateToPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
-              className="px-2 py-1 text-xs text-white/40 hover:text-white disabled:opacity-30 rounded hover:bg-white/[0.06]">
-              Prev
-            </button>
-            <span className="text-xs text-white/50 flex items-center gap-1">
-              Page{' '}
-              <input
-                type="number"
-                min={1}
-                max={pdfFile.pageCount}
-                value={currentPage}
-                onChange={e => {
-                  const val = parseInt(e.target.value)
-                  if (!isNaN(val) && val >= 1 && val <= pdfFile.pageCount) navigateToPage(val)
-                }}
-                className="w-10 px-1 py-0 text-xs text-center text-white/50 bg-transparent border border-white/[0.1] rounded focus:border-[#F47B20]/50 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-              />
-              {' '}/ {pdfFile.pageCount}
-            </span>
-            <button onClick={() => navigateToPage(p => Math.min(pdfFile.pageCount, p + 1))} disabled={currentPage === pdfFile.pageCount}
-              className="px-2 py-1 text-xs text-white/40 hover:text-white disabled:opacity-30 rounded hover:bg-white/[0.06]">
-              Next
-            </button>
-          </div>
-        )}
-        <div className="flex items-center gap-1 text-[10px] text-white/25">
-          <span>{(annotations[currentPage] || []).length} annotations</span>
+
+        {/* Right: annotations + hint */}
+        <div className="flex items-center justify-end gap-1 text-[10px] text-white/25 min-w-0">
+          <span>{(annotations[currentPage] || []).length} ann</span>
           {(measurements[currentPage] || []).length > 0 && (
-            <span>· {(measurements[currentPage] || []).length} measurements</span>
+            <span>· {(measurements[currentPage] || []).length} meas</span>
           )}
-          <span>· {
-            selectedAnnId ? 'Arrow keys to nudge · Del to delete · Esc to deselect' :
-            activeTool === 'select' ? 'Click to select annotations' :
-            activeTool === 'text' ? 'Click+drag to create text box' :
-            activeTool === 'callout' ? 'Click+drag to create callout box' :
-            activeTool === 'cloud' ? `Click to place vertices (${currentPtsRef.current.length} placed) · Double-click to close · Backspace to undo` :
-            activeTool === 'measure' ? 'Click two points to measure' :
-            activeTool === 'textHighlight' ? 'Click+drag to highlight text' :
+          <span className="truncate">· {
+            selectedAnnId ? 'Arrows nudge · Del delete' :
+            activeTool === 'select' ? 'Click to select' :
+            activeTool === 'text' ? 'Drag to create text' :
+            activeTool === 'callout' ? 'Drag to create callout' :
+            activeTool === 'cloud' ? `${currentPtsRef.current.length} pts · Dbl-click close` :
+            activeTool === 'measure' ? 'Click two points' :
+            activeTool === 'textHighlight' ? 'Drag to highlight' :
             (activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'line' || activeTool === 'arrow')
-              ? 'Hold Shift for perfect shapes' :
-            'Ctrl+scroll to zoom'
+              ? 'Shift for perfect shapes' :
+            'Ctrl+scroll zoom'
           }</span>
         </div>
       </div>
