@@ -3029,10 +3029,18 @@ export default function PdfAnnotateTool() {
             return
           }
 
-          // Click inside box → edit text
+          // Click inside box → double-click to edit, single-click allows drag
           if (hitTestCalloutBox(pt, ann)) {
-            enterEditMode(ann.id)
+            if (isDoubleClick) {
+              enterEditMode(ann.id)
+            }
             setSelectedArrowIdx(null)
+            isDrawingRef.current = true
+            textDragRef.current = {
+              mode: 'move', startPt: pt,
+              origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
+              origArrows: ann.arrows ? [...ann.arrows] : undefined,
+            }
             return
           }
 
@@ -3062,18 +3070,19 @@ export default function PdfAnnotateTool() {
       // Check if clicking on an existing callout
       const hitCallout = findCalloutAt(pt)
       if (hitCallout) {
-        if (hitCallout.id === selectedAnnId) {
-          enterEditMode(hitCallout.id)
-        } else {
+        if (hitCallout.id !== selectedAnnId) {
           setSelectedAnnId(hitCallout.id)
-          if (isDoubleClick) enterEditMode(hitCallout.id)
-          if (hitCallout.width && hitCallout.height) {
-            isDrawingRef.current = true
-            textDragRef.current = {
-              mode: 'move', startPt: pt,
-              origPoints: [...hitCallout.points], origWidth: hitCallout.width, origHeight: hitCallout.height,
-              origArrows: hitCallout.arrows ? [...hitCallout.arrows] : undefined,
-            }
+        }
+        // Double-click → edit mode; single-click → allow drag
+        if (isDoubleClick) {
+          enterEditMode(hitCallout.id)
+        }
+        if (hitCallout.width && hitCallout.height) {
+          isDrawingRef.current = true
+          textDragRef.current = {
+            mode: 'move', startPt: pt,
+            origPoints: [...hitCallout.points], origWidth: hitCallout.width, origHeight: hitCallout.height,
+            origArrows: hitCallout.arrows ? [...hitCallout.arrows] : undefined,
           }
         }
         return
@@ -3111,9 +3120,20 @@ export default function PdfAnnotateTool() {
             return
           }
 
-          // Check if clicking inside the selected textbox → enter edit mode
+          // Check if clicking inside the selected textbox
           if (hitTest(pt, ann, 4)) {
-            enterEditMode(ann.id)
+            // Double-click → edit mode; single-click → allow drag
+            if (isDoubleClick) {
+              enterEditMode(ann.id)
+            }
+            isDrawingRef.current = true
+            textDragRef.current = {
+              mode: 'move',
+              startPt: pt,
+              origPoints: [...ann.points],
+              origWidth: ann.width,
+              origHeight: ann.height,
+            }
             return
           }
         }
@@ -3122,26 +3142,22 @@ export default function PdfAnnotateTool() {
       // Check if clicking on an existing text annotation
       const hitAnn = findTextAnnotationAt(pt)
       if (hitAnn) {
-        if (hitAnn.id === selectedAnnId) {
-          // Already selected, enter edit
-          enterEditMode(hitAnn.id)
-        } else {
-          // Select it
+        if (hitAnn.id !== selectedAnnId) {
           setSelectedAnnId(hitAnn.id)
-          // Double-click to edit
-          if (isDoubleClick) {
-            enterEditMode(hitAnn.id)
-          }
-          // Start move drag
-          if (hitAnn.width && hitAnn.height) {
-            isDrawingRef.current = true
-            textDragRef.current = {
-              mode: 'move',
-              startPt: pt,
-              origPoints: [...hitAnn.points],
-              origWidth: hitAnn.width,
-              origHeight: hitAnn.height,
-            }
+        }
+        // Double-click → edit mode; single-click → allow drag
+        if (isDoubleClick) {
+          enterEditMode(hitAnn.id)
+        }
+        // Start move drag
+        if (hitAnn.width && hitAnn.height) {
+          isDrawingRef.current = true
+          textDragRef.current = {
+            mode: 'move',
+            startPt: pt,
+            origPoints: [...hitAnn.points],
+            origWidth: hitAnn.width,
+            origHeight: hitAnn.height,
           }
         }
         return
