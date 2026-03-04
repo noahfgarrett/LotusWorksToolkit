@@ -1,5 +1,5 @@
 const GITHUB_API_URL =
-  'https://api.github.com/repos/noahfgarrett-coder/LotusWorksToolkit/releases/latest'
+  'https://api.github.com/repos/noahfgarrett/LotusWorksToolkit/releases/latest'
 const TIMEOUT_MS = 5000
 
 export interface UpdateInfo {
