@@ -25,7 +25,7 @@ export function UpdateModal({ open, onClose, info }: UpdateModalProps) {
 
   function handleViewOnGitHub() {
     window.open(
-      `https://github.com/noahfgarrett-coder/LotusWorksToolkit/releases/tag/v${info.version}`,
+      `https://github.com/noahfgarrett/LotusWorksToolkit/releases/tag/v${info.version}`,
       '_blank',
       'noopener',
     )
