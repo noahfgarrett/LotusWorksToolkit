@@ -1,0 +1,23 @@
+{
+  "employees": [
+    {
+      "name": "John Doe",
+      "age": 32,
+      "department": "Engineering"
+    },
+    {
+      "name": "Jane Smith",
+      "age": 28,
+      "department": "Marketing"
+    },
+    {
+      "name": "Bob Wilson",
+      "age": 45,
+      "department": "Sales"
+    }
+  ],
+  "metadata": {
+    "total": 3,
+    "generated": "2026-02-27T13:56:29.244Z"
+  }
+}

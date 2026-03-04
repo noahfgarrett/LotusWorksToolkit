@@ -35,5 +35,5 @@ React-Audit.md
 QA-Audit.md
 test-results/
 playwright-report/
-e2e/
-playwright.config.ts
+e2e/**/test-results/
+e2e/**/*-snapshots/
