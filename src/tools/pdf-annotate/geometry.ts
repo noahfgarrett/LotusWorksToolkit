@@ -588,3 +588,40 @@ export function hitTestMeasurementLabel(pt: Point, m: { startPt: Point; endPt: P
   const my = (m.startPt.y + m.endPt.y) / 2
   return Math.hypot(pt.x - mx, pt.y - my) < threshold
 }
+
+// ── Ramer-Douglas-Peucker point decimation ───────────
+
+/**
+ * Ramer-Douglas-Peucker algorithm — reduce point count while preserving shape.
+ * epsilon = max perpendicular distance tolerance (in doc-space units).
+ */
+export function decimatePoints(points: Point[], epsilon: number): Point[] {
+  if (points.length <= 2) return points
+
+  // Find the point with maximum distance from the line between first and last
+  let maxDist = 0
+  let maxIdx = 0
+  const first = points[0]
+  const last = points[points.length - 1]
+  const dx = last.x - first.x
+  const dy = last.y - first.y
+  const lenSq = dx * dx + dy * dy
+
+  for (let i = 1; i < points.length - 1; i++) {
+    let dist: number
+    if (lenSq === 0) {
+      dist = Math.hypot(points[i].x - first.x, points[i].y - first.y)
+    } else {
+      const t = Math.max(0, Math.min(1, ((points[i].x - first.x) * dx + (points[i].y - first.y) * dy) / lenSq))
+      dist = Math.hypot(points[i].x - (first.x + t * dx), points[i].y - (first.y + t * dy))
+    }
+    if (dist > maxDist) { maxDist = dist; maxIdx = i }
+  }
+
+  if (maxDist > epsilon) {
+    const left = decimatePoints(points.slice(0, maxIdx + 1), epsilon)
+    const right = decimatePoints(points.slice(maxIdx), epsilon)
+    return [...left.slice(0, -1), ...right]
+  }
+  return [first, last]
+}
