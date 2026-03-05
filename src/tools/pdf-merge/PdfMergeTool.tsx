@@ -526,26 +526,6 @@ export default function PdfMergeTool() {
     return `${included}/${file.pages.length} pages`
   }
 
-  /* ── Render: empty state ── */
-
-  if (files.length === 0) {
-    return (
-      <div className="h-full flex flex-col gap-4">
-        <FileDropZone
-          onFiles={handleFiles}
-          accept="application/pdf"
-          multiple
-          label="Drop PDF files here"
-          description="Add 2 or more PDFs to merge"
-          className="h-full"
-        />
-        {isLoading && (
-          <div className="text-center text-sm text-white/40">Loading files...</div>
-        )}
-      </div>
-    )
-  }
-
   /* ── Native file drop on the main view ── */
 
   const [fileDragOver, setFileDragOver] = useState(false)
@@ -583,6 +563,26 @@ export default function PdfMergeTool() {
     const droppedFiles = Array.from(e.dataTransfer.files)
     if (droppedFiles.length > 0) handleFiles(droppedFiles)
   }, [handleFiles])
+
+  /* ── Render: empty state ── */
+
+  if (files.length === 0) {
+    return (
+      <div className="h-full flex flex-col gap-4">
+        <FileDropZone
+          onFiles={handleFiles}
+          accept="application/pdf"
+          multiple
+          label="Drop PDF files here"
+          description="Add 2 or more PDFs to merge"
+          className="h-full"
+        />
+        {isLoading && (
+          <div className="text-center text-sm text-white/40">Loading files...</div>
+        )}
+      </div>
+    )
+  }
 
   /* ── Render: main view ── */
 
