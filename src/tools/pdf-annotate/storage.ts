@@ -34,6 +34,9 @@ export interface PdfAnnotateSession {
   textAlign: string
   textBgColor: string | null
   lineSpacing: number
+  superscript: boolean
+  subscript: boolean
+  listType: string
   eraserRadius: number
   eraserMode: string
   activeHighlight: string

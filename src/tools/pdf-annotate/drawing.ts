@@ -60,6 +60,18 @@ export function drawSmoothPath(ctx: CanvasRenderingContext2D, pts: Point[], scal
   ctx.stroke()
 }
 
+// ── List prefix helper ──────────────────────────────────
+
+function applyListPrefix(text: string, listType: 'none' | 'bullet' | 'numbered' | undefined): string {
+  if (!listType || listType === 'none') return text
+  const lines = text.split('\n')
+  return lines.map((line, i) => {
+    if (!line.trim()) return line
+    const prefix = listType === 'bullet' ? '•  ' : `${i + 1}.  `
+    return prefix + line
+  }).join('\n')
+}
+
 // ── Canvas drawing ─────────────────────────────────────
 
 export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: number) {
@@ -196,7 +208,12 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
     }
     case 'text': {
       if (!ann.text || !pts.length) break
-      const fs = (ann.fontSize || 16) * scale
+      const baseFontSize = ann.fontSize || 16
+      let effectiveFontSize = baseFontSize
+      let yOffset = 0
+      if (ann.superscript) { effectiveFontSize *= 0.6; yOffset = -baseFontSize * 0.4 }
+      else if (ann.subscript) { effectiveFontSize *= 0.6; yOffset = baseFontSize * 0.2 }
+      const fs = effectiveFontSize * scale
       const ff = ann.fontFamily || 'Arial'
       const fontStyle = ann.italic ? 'italic' : 'normal'
       const fontWeight = ann.bold ? 'bold' : 'normal'
@@ -211,6 +228,7 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
         ctx.clip()
       }
       const textLH = ann.lineHeight || 1.3
+      const processedText = applyListPrefix(ann.text, ann.listType)
 
       if (ann.backgroundColor && ann.width && ann.height) {
         ctx.save()
@@ -223,11 +241,38 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
       }
 
       if (ann.width) {
-        const lines = wrapText(ann.text, ann.width, ann.fontSize || 16, ann.bold, (t: string) => ctx.measureText(t).width / scale)
-        const lineH = (ann.fontSize || 16) * textLH
+        const lines = wrapText(processedText, ann.width, effectiveFontSize, ann.bold, (t: string) => ctx.measureText(t).width / scale)
+        const lineH = effectiveFontSize * textLH
         for (let i = 0; i < lines.length; i++) {
-          const lineY = (pts[0].y + lineH * i) * scale
+          const lineY = (pts[0].y + yOffset + lineH * i) * scale
           let lineX = pts[0].x * scale
+
+          // Justify alignment: distribute words across full width (except last line)
+          if (align === 'justify' && i < lines.length - 1) {
+            const words = lines[i].split(' ')
+            if (words.length > 1) {
+              const totalTextWidth = words.reduce((sum, w) => sum + ctx.measureText(w).width, 0)
+              const extraSpace = (ann.width * scale - totalTextWidth) / (words.length - 1)
+              let xPos = pts[0].x * scale
+              for (const word of words) {
+                ctx.fillText(word, xPos, lineY)
+                xPos += ctx.measureText(word).width + extraSpace
+              }
+              // Underline/strikethrough for justified line
+              if (ann.underline) {
+                const uy = lineY + fs * 0.95
+                ctx.beginPath(); ctx.moveTo(pts[0].x * scale, uy); ctx.lineTo(pts[0].x * scale + ann.width * scale, uy)
+                ctx.lineWidth = Math.max(1, fs * 0.06); ctx.strokeStyle = ann.color; ctx.stroke()
+              }
+              if (ann.strikethrough) {
+                const sy = lineY + fs * 0.4
+                ctx.beginPath(); ctx.moveTo(pts[0].x * scale, sy); ctx.lineTo(pts[0].x * scale + ann.width * scale, sy)
+                ctx.lineWidth = Math.max(1, fs * 0.06); ctx.strokeStyle = ann.color; ctx.stroke()
+              }
+              continue
+            }
+          }
+
           if (align === 'center') lineX += (ann.width * scale - ctx.measureText(lines[i]).width) / 2
           else if (align === 'right') lineX += ann.width * scale - ctx.measureText(lines[i]).width
           ctx.fillText(lines[i], lineX, lineY)
@@ -245,9 +290,9 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
           }
         }
       } else {
-        const lines = ann.text.split('\n')
+        const lines = processedText.split('\n')
         for (let i = 0; i < lines.length; i++) {
-          const lineY = (pts[0].y + (ann.fontSize || 16) * textLH * i) * scale
+          const lineY = (pts[0].y + yOffset + effectiveFontSize * textLH * i) * scale
           ctx.fillText(lines[i], pts[0].x * scale, lineY)
           if (ann.underline) {
             const tw = ctx.measureText(lines[i]).width
@@ -280,7 +325,12 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
       ctx.strokeRect(bx, by, bw, bh)
 
       if (ann.text) {
-        const cfs = (ann.fontSize || 14) * scale
+        const cBaseFontSize = ann.fontSize || 14
+        let cEffectiveFontSize = cBaseFontSize
+        let cYOffset = 0
+        if (ann.superscript) { cEffectiveFontSize *= 0.6; cYOffset = -cBaseFontSize * 0.4 }
+        else if (ann.subscript) { cEffectiveFontSize *= 0.6; cYOffset = cBaseFontSize * 0.2 }
+        const cfs = cEffectiveFontSize * scale
         const cff = ann.fontFamily || 'Arial'
         const cFontStyle = ann.italic ? 'italic' : 'normal'
         const cFontWeight = ann.bold ? 'bold' : 'normal'
@@ -289,13 +339,40 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
         ctx.textBaseline = 'top'
         const cAlign = ann.textAlign || 'left'
         const calloutLH = ann.lineHeight || 1.3
-        const lines = wrapText(ann.text, ann.width - 8, ann.fontSize || 14, ann.bold, (t: string) => ctx.measureText(t).width / scale)
-        const lineH = (ann.fontSize || 14) * calloutLH
+        const cProcessedText = applyListPrefix(ann.text, ann.listType)
+        const lines = wrapText(cProcessedText, ann.width - 8, cEffectiveFontSize, ann.bold, (t: string) => ctx.measureText(t).width / scale)
+        const lineH = cEffectiveFontSize * calloutLH
         const padding = 4 * scale
+        const availW = bw - padding * 2
         for (let i = 0; i < lines.length; i++) {
-          const lineY = by + padding + lineH * i * scale
+          const lineY = by + padding + (cYOffset * scale) + lineH * i * scale
           let lineX = bx + padding
-          const availW = bw - padding * 2
+
+          // Justify alignment for callout (except last line)
+          if (cAlign === 'justify' && i < lines.length - 1) {
+            const words = lines[i].split(' ')
+            if (words.length > 1) {
+              const totalTextWidth = words.reduce((sum, w) => sum + ctx.measureText(w).width, 0)
+              const extraSpace = (availW - totalTextWidth) / (words.length - 1)
+              let xPos = bx + padding
+              for (const word of words) {
+                ctx.fillText(word, xPos, lineY)
+                xPos += ctx.measureText(word).width + extraSpace
+              }
+              if (ann.underline) {
+                const uy = lineY + cfs * 0.95
+                ctx.beginPath(); ctx.moveTo(bx + padding, uy); ctx.lineTo(bx + padding + availW, uy)
+                ctx.lineWidth = Math.max(1, cfs * 0.06); ctx.strokeStyle = calloutColor; ctx.stroke()
+              }
+              if (ann.strikethrough) {
+                const sy = lineY + cfs * 0.4
+                ctx.beginPath(); ctx.moveTo(bx + padding, sy); ctx.lineTo(bx + padding + availW, sy)
+                ctx.lineWidth = Math.max(1, cfs * 0.06); ctx.strokeStyle = calloutColor; ctx.stroke()
+              }
+              continue
+            }
+          }
+
           if (cAlign === 'center') lineX += (availW - ctx.measureText(lines[i]).width) / 2
           else if (cAlign === 'right') lineX += availW - ctx.measureText(lines[i]).width
           ctx.fillText(lines[i], lineX, lineY)

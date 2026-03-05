@@ -26,7 +26,7 @@ export interface Annotation {
   strikethrough?: boolean
   backgroundColor?: string
   lineHeight?: number
-  textAlign?: 'left' | 'center' | 'right'
+  textAlign?: 'left' | 'center' | 'right' | 'justify'
   width?: number   // textbox width (doc space) — text & callout
   height?: number  // textbox height (doc space) — text & callout
   arrows?: Point[] // callout only: arrow tip positions
@@ -36,6 +36,9 @@ export interface Annotation {
   cornerRadius?: number // rounded rectangle corner radius
   dashPattern?: 'solid' | 'dashed' | 'dotted' // stroke dash pattern
   arrowStart?: boolean // arrow at start point (for arrow/line tool)
+  superscript?: boolean
+  subscript?: boolean
+  listType?: 'none' | 'bullet' | 'numbered'
 }
 
 export type PageAnnotations = Record<number, Annotation[]>
