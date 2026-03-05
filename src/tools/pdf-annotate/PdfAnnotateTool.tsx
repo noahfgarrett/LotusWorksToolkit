@@ -47,6 +47,10 @@ interface Annotation {
   arrows?: Point[] // callout only: arrow tip positions
   smooth?: boolean // false = straight segments (eraser fragments from shapes)
   rects?: { x: number; y: number; w: number; h: number }[] // text highlight rectangles
+  fillColor?: string // fill color for shapes (rectangle, circle, cloud)
+  cornerRadius?: number // rounded rectangle corner radius
+  dashPattern?: 'solid' | 'dashed' | 'dotted' // stroke dash pattern
+  arrowStart?: boolean // arrow at start point (for arrow/line tool)
 }
 
 type PageAnnotations = Record<number, Annotation[]>
@@ -839,6 +843,10 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
   ctx.lineJoin = 'round'
   ctx.lineWidth = ann.strokeWidth * scale
 
+  // Dash pattern
+  if (ann.dashPattern === 'dashed') ctx.setLineDash([ann.strokeWidth * scale * 3, ann.strokeWidth * scale * 2])
+  else if (ann.dashPattern === 'dotted') ctx.setLineDash([ann.strokeWidth * scale, ann.strokeWidth * scale * 2])
+
   if (ann.type === 'highlighter') {
     ctx.globalCompositeOperation = 'multiply'
   }
@@ -887,29 +895,51 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
     }
     case 'arrow': {
       if (pts.length < 2) break
-      const sx = pts[0].x * scale, sy = pts[0].y * scale
-      const ex = pts[1].x * scale, ey = pts[1].y * scale
-      const angle = Math.atan2(ey - sy, ex - sx)
-      const hl = Math.min(28, Math.max(14, ann.strokeWidth * scale * 2.5))
-      const halfAngle = Math.PI / 7
-      // Line stops at arrowhead base to avoid bleed-through
-      const baseX = ex - hl * Math.cos(angle)
-      const baseY = ey - hl * Math.sin(angle)
-      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(baseX, baseY); ctx.stroke()
-      // Filled arrowhead
+      const asx = pts[0].x * scale, asy = pts[0].y * scale
+      const aex = pts[1].x * scale, aey = pts[1].y * scale
+      const aAngle = Math.atan2(aey - asy, aex - asx)
+      const ahl = Math.min(28, Math.max(14, ann.strokeWidth * scale * 2.5))
+      const aHalfAngle = Math.PI / 7
+      // Line endpoints adjusted for arrowhead bases
+      let lineStartX = asx, lineStartY = asy
+      const lineEndX = aex - ahl * Math.cos(aAngle)
+      const lineEndY = aey - ahl * Math.sin(aAngle)
+      // Start arrowhead (double-headed)
+      if (ann.arrowStart) {
+        lineStartX = asx + ahl * Math.cos(aAngle)
+        lineStartY = asy + ahl * Math.sin(aAngle)
+        const sAngle = aAngle + Math.PI
+        ctx.beginPath()
+        ctx.moveTo(asx, asy)
+        ctx.lineTo(asx - ahl * Math.cos(sAngle - aHalfAngle), asy - ahl * Math.sin(sAngle - aHalfAngle))
+        ctx.lineTo(asx - ahl * Math.cos(sAngle + aHalfAngle), asy - ahl * Math.sin(sAngle + aHalfAngle))
+        ctx.closePath(); ctx.fill()
+      }
+      ctx.beginPath(); ctx.moveTo(lineStartX, lineStartY); ctx.lineTo(lineEndX, lineEndY); ctx.stroke()
+      // End arrowhead
       ctx.beginPath()
-      ctx.moveTo(ex, ey)
-      ctx.lineTo(ex - hl * Math.cos(angle - halfAngle), ey - hl * Math.sin(angle - halfAngle))
-      ctx.lineTo(ex - hl * Math.cos(angle + halfAngle), ey - hl * Math.sin(angle + halfAngle))
+      ctx.moveTo(aex, aey)
+      ctx.lineTo(aex - ahl * Math.cos(aAngle - aHalfAngle), aey - ahl * Math.sin(aAngle - aHalfAngle))
+      ctx.lineTo(aex - ahl * Math.cos(aAngle + aHalfAngle), aey - ahl * Math.sin(aAngle + aHalfAngle))
       ctx.closePath(); ctx.fill()
       break
     }
     case 'rectangle': {
       if (pts.length < 2) break
-      ctx.strokeRect(
-        Math.min(pts[0].x, pts[1].x) * scale, Math.min(pts[0].y, pts[1].y) * scale,
-        Math.abs(pts[1].x - pts[0].x) * scale, Math.abs(pts[1].y - pts[0].y) * scale,
-      )
+      const rx = Math.min(pts[0].x, pts[1].x) * scale
+      const ry = Math.min(pts[0].y, pts[1].y) * scale
+      const rw = Math.abs(pts[1].x - pts[0].x) * scale
+      const rh = Math.abs(pts[1].y - pts[0].y) * scale
+      const cr = (ann.cornerRadius || 0) * scale
+      if (cr > 0) {
+        ctx.beginPath()
+        ctx.roundRect(rx, ry, rw, rh, cr)
+        if (ann.fillColor) { ctx.fillStyle = ann.fillColor; ctx.fill() }
+        ctx.stroke()
+      } else {
+        if (ann.fillColor) { ctx.fillStyle = ann.fillColor; ctx.fillRect(rx, ry, rw, rh) }
+        ctx.strokeRect(rx, ry, rw, rh)
+      }
       break
     }
     case 'cloud': {
@@ -923,17 +953,20 @@ function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, scale: n
         drawCloudEdge(ctx, a.x * scale, a.y * scale, b.x * scale, b.y * scale, arcSize)
       }
       ctx.closePath()
+      if (ann.fillColor) { ctx.fillStyle = ann.fillColor; ctx.fill() }
       ctx.stroke()
       break
     }
     case 'circle': {
       if (pts.length < 2) break
-      const cx = ((pts[0].x + pts[1].x) / 2) * scale
-      const cy = ((pts[0].y + pts[1].y) / 2) * scale
-      const rx = (Math.abs(pts[1].x - pts[0].x) / 2) * scale
-      const ry = (Math.abs(pts[1].y - pts[0].y) / 2) * scale
-      if (rx > 0 && ry > 0) {
-        ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke()
+      const ecx = ((pts[0].x + pts[1].x) / 2) * scale
+      const ecy = ((pts[0].y + pts[1].y) / 2) * scale
+      const erx = (Math.abs(pts[1].x - pts[0].x) / 2) * scale
+      const ery = (Math.abs(pts[1].y - pts[0].y) / 2) * scale
+      if (erx > 0 && ery > 0) {
+        ctx.beginPath(); ctx.ellipse(ecx, ecy, erx, ery, 0, 0, Math.PI * 2)
+        if (ann.fillColor) { ctx.fillStyle = ann.fillColor; ctx.fill() }
+        ctx.stroke()
       }
       break
     }
@@ -1414,6 +1447,10 @@ export default function PdfAnnotateTool() {
 
   // Straight-line mode
   const [straightLineMode, setStraightLineMode] = useState(false)
+  const [fillColor, setFillColor] = useState<string | null>(null)
+  const [cornerRadius, setCornerRadius] = useState(0)
+  const [dashPattern, setDashPattern] = useState<'solid' | 'dashed' | 'dotted'>('solid')
+  const [arrowStart, setArrowStart] = useState(false)
 
   // Eraser
   const [eraserRadius, setEraserRadius] = useState(15)
@@ -1662,6 +1699,10 @@ export default function PdfAnnotateTool() {
             points: pts, color, fontSize,
             strokeWidth: activeTool === 'highlighter' ? strokeWidth * 3 : strokeWidth,
             opacity: activeTool === 'highlighter' ? 0.4 : opacity / 100,
+            ...(fillColor && (activeTool === 'rectangle' || activeTool === 'circle') ? { fillColor } : {}),
+            ...(cornerRadius > 0 && activeTool === 'rectangle' ? { cornerRadius } : {}),
+            ...(dashPattern !== 'solid' ? { dashPattern } : {}),
+            ...(arrowStart && activeTool === 'arrow' ? { arrowStart: true } : {}),
           }
           drawAnnotation(ctx, inProgress, RENDER_SCALE)
         }
@@ -1755,6 +1796,18 @@ export default function PdfAnnotateTool() {
           ctx.beginPath()
           ctx.arc(p.x * scale, p.y * scale, 4, 0, Math.PI * 2)
           ctx.fill()
+        }
+
+        // Snap indicator: highlight first vertex when cursor is near it
+        if (preview && cpts.length >= 3) {
+          const snapDist = Math.hypot(preview.x - cpts[0].x, preview.y - cpts[0].y)
+          if (snapDist < 15 / zoomRef.current) {
+            ctx.strokeStyle = '#22C55E'
+            ctx.lineWidth = 2
+            ctx.beginPath()
+            ctx.arc(cpts[0].x * scale, cpts[0].y * scale, 8, 0, Math.PI * 2)
+            ctx.stroke()
+          }
         }
 
         ctx.setLineDash([])
@@ -2951,6 +3004,10 @@ export default function PdfAnnotateTool() {
         setColor(hitAnn.color)
         setStrokeWidth(hitAnn.strokeWidth)
         setOpacity(Math.round(hitAnn.opacity * 100))
+        setFillColor(hitAnn.fillColor || null)
+        setCornerRadius(hitAnn.cornerRadius || 0)
+        setDashPattern(hitAnn.dashPattern || 'solid')
+        setArrowStart(hitAnn.arrowStart || false)
         if (hitAnn.type === 'text' || hitAnn.type === 'callout') {
           setFontFamily(hitAnn.fontFamily || 'Arial')
           setFontSize(hitAnn.fontSize || 16)
@@ -3003,12 +3060,35 @@ export default function PdfAnnotateTool() {
       const isDbl = (now - last.time) < 400 && Math.hypot(pt.x - last.pt.x, pt.y - last.pt.y) < 20
       cloudLastClickRef.current = { time: now, pt }
 
+      // Auto-close: click near first vertex to close polygon
+      const closeThreshold = 15 / zoom
+      if (!isDbl && currentPtsRef.current.length >= 3) {
+        const first = currentPtsRef.current[0]
+        if (Math.hypot(pt.x - first.x, pt.y - first.y) < closeThreshold) {
+          const pts = [...currentPtsRef.current]
+          const ann: Annotation = {
+            id: genId(), type: 'cloud',
+            points: pts, color, strokeWidth, opacity: opacity / 100, fontSize,
+            ...(fillColor ? { fillColor } : {}),
+            ...(dashPattern !== 'solid' ? { dashPattern } : {}),
+          }
+          commitAnnotation(ann)
+          currentPtsRef.current = []
+          cloudPreviewRef.current = null
+          cloudLastClickRef.current = { time: 0, pt: { x: 0, y: 0 } }
+          redrawPage(pageNum)
+          return
+        }
+      }
+
       // Double-click: finalize polygon if we have enough vertices
       if (isDbl && currentPtsRef.current.length >= 3) {
         const pts = [...currentPtsRef.current]
         const ann: Annotation = {
           id: genId(), type: 'cloud',
           points: pts, color, strokeWidth, opacity: opacity / 100, fontSize,
+          ...(fillColor ? { fillColor } : {}),
+          ...(dashPattern !== 'solid' ? { dashPattern } : {}),
         }
         commitAnnotation(ann)
         currentPtsRef.current = []
@@ -3831,10 +3911,14 @@ export default function PdfAnnotateTool() {
       strokeWidth: isHL ? strokeWidth * 3 : strokeWidth,
       opacity: isHL ? 0.4 : opacity / 100,
       fontSize,
+      ...(fillColor && (activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'cloud') ? { fillColor } : {}),
+      ...(cornerRadius > 0 && activeTool === 'rectangle' ? { cornerRadius } : {}),
+      ...(dashPattern !== 'solid' ? { dashPattern } : {}),
+      ...(arrowStart && activeTool === 'arrow' ? { arrowStart: true } : {}),
     }
     currentPtsRef.current = []
     commitAnnotation(ann)
-  }, [activeTool, color, strokeWidth, opacity, fontSize, commitAnnotation,
+  }, [activeTool, color, strokeWidth, opacity, fontSize, fillColor, cornerRadius, dashPattern, arrowStart, commitAnnotation,
       pushHistory, redrawPage, annotations, getAnnotation, updateAnnotation, selectedAnnId])
 
   // ── Export annotated PDF ─────────────────────────────
@@ -3915,13 +3999,17 @@ export default function PdfAnnotateTool() {
                 }
               }
               break
-            case 'line':
+            case 'line': {
               if (ann.points.length < 2) break
-              page.drawLine({
+              const lineOpts: Record<string, unknown> = {
                 start: toPC(ann.points[0]), end: toPC(ann.points[1]),
                 thickness: ann.strokeWidth, color: c, opacity: ann.opacity,
-              })
+              }
+              if (ann.dashPattern === 'dashed') lineOpts.dashArray = [ann.strokeWidth * 3, ann.strokeWidth * 2]
+              else if (ann.dashPattern === 'dotted') lineOpts.dashArray = [ann.strokeWidth, ann.strokeWidth * 2]
+              page.drawLine(lineOpts as unknown as Parameters<typeof page.drawLine>[0])
               break
+            }
             case 'arrow': {
               if (ann.points.length < 2) break
               const s = toPC(ann.points[0])
@@ -3929,11 +4017,18 @@ export default function PdfAnnotateTool() {
               const pdfAngle = Math.atan2(e.y - s.y, e.x - s.x)
               const hl = Math.min(20, Math.max(10, ann.strokeWidth * 2.5))
               const halfAngle = Math.PI / 7
-              // Line stops at arrowhead base
+              // End arrowhead base
               const baseX = e.x - hl * Math.cos(pdfAngle)
               const baseY = e.y - hl * Math.sin(pdfAngle)
-              page.drawLine({ start: s, end: { x: baseX, y: baseY }, thickness: ann.strokeWidth, color: c, opacity: ann.opacity })
-              // Filled arrowhead via SVG path (relative offsets, Y negated for SVG Y-down)
+              // Start arrowhead base (for double-headed)
+              const lineStart = ann.arrowStart
+                ? { x: s.x + hl * Math.cos(pdfAngle), y: s.y + hl * Math.sin(pdfAngle) }
+                : s
+              const arrowLineOpts: Record<string, unknown> = { start: lineStart, end: { x: baseX, y: baseY }, thickness: ann.strokeWidth, color: c, opacity: ann.opacity }
+              if (ann.dashPattern === 'dashed') arrowLineOpts.dashArray = [ann.strokeWidth * 3, ann.strokeWidth * 2]
+              else if (ann.dashPattern === 'dotted') arrowLineOpts.dashArray = [ann.strokeWidth, ann.strokeWidth * 2]
+              page.drawLine(arrowLineOpts as unknown as Parameters<typeof page.drawLine>[0])
+              // End arrowhead
               const lxOff = -hl * Math.cos(pdfAngle - halfAngle)
               const lyOff = hl * Math.sin(pdfAngle - halfAngle)
               const rxOff = -hl * Math.cos(pdfAngle + halfAngle)
@@ -3941,22 +4036,61 @@ export default function PdfAnnotateTool() {
               page.drawSvgPath(`M 0 0 L ${lxOff} ${lyOff} L ${rxOff} ${ryOff} Z`, {
                 x: e.x, y: e.y, color: c, opacity: ann.opacity, borderWidth: 0,
               })
+              // Start arrowhead (double-headed)
+              if (ann.arrowStart) {
+                const revAngle = pdfAngle + Math.PI
+                const slxOff = -hl * Math.cos(revAngle - halfAngle)
+                const slyOff = hl * Math.sin(revAngle - halfAngle)
+                const srxOff = -hl * Math.cos(revAngle + halfAngle)
+                const sryOff = hl * Math.sin(revAngle + halfAngle)
+                page.drawSvgPath(`M 0 0 L ${slxOff} ${slyOff} L ${srxOff} ${sryOff} Z`, {
+                  x: s.x, y: s.y, color: c, opacity: ann.opacity, borderWidth: 0,
+                })
+              }
               break
             }
             case 'rectangle': {
               if (ann.points.length < 2) break
               const tl = toPC({ x: Math.min(ann.points[0].x, ann.points[1].x), y: Math.max(ann.points[0].y, ann.points[1].y) })
-              const w = Math.abs(ann.points[1].x - ann.points[0].x)
-              const h = Math.abs(ann.points[1].y - ann.points[0].y)
-              page.drawRectangle({
-                x: tl.x, y: tl.y,
-                width: w, height: h,
+              const rw = Math.abs(ann.points[1].x - ann.points[0].x)
+              const rh = Math.abs(ann.points[1].y - ann.points[0].y)
+              const rectOpts: Record<string, unknown> = {
+                x: tl.x, y: tl.y, width: rw, height: rh,
                 borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
-              })
+              }
+              if (ann.fillColor) {
+                const fc = ann.fillColor
+                const fr = parseInt(fc.slice(1, 3), 16) / 255
+                const fg = parseInt(fc.slice(3, 5), 16) / 255
+                const fb = parseInt(fc.slice(5, 7), 16) / 255
+                rectOpts.color = rgb(fr, fg, fb)
+                rectOpts.opacity = ann.opacity
+              }
+              if (ann.dashPattern === 'dashed') rectOpts.borderDashArray = [ann.strokeWidth * 3, ann.strokeWidth * 2]
+              else if (ann.dashPattern === 'dotted') rectOpts.borderDashArray = [ann.strokeWidth, ann.strokeWidth * 2]
+              page.drawRectangle(rectOpts as Parameters<typeof page.drawRectangle>[0])
               break
             }
             case 'cloud': {
               if (ann.points.length < 3) break
+              // Fill polygon if fillColor set
+              if (ann.fillColor) {
+                const fc = ann.fillColor
+                const fr = parseInt(fc.slice(1, 3), 16) / 255
+                const fg = parseInt(fc.slice(3, 5), 16) / 255
+                const fb = parseInt(fc.slice(5, 7), 16) / 255
+                const first = toPC(ann.points[0])
+                let svgD = `M ${0} ${0}`
+                for (let pi = 1; pi < ann.points.length; pi++) {
+                  const pt = toPC(ann.points[pi])
+                  svgD += ` L ${pt.x - first.x} ${-(pt.y - first.y)}`
+                }
+                svgD += ' Z'
+                page.drawSvgPath(svgD, { x: first.x, y: first.y, color: rgb(fr, fg, fb), opacity: ann.opacity, borderWidth: 0 })
+              }
+              // Bumpy outline
+              const cloudDash = ann.dashPattern === 'dashed' ? [ann.strokeWidth * 3, ann.strokeWidth * 2]
+                : ann.dashPattern === 'dotted' ? [ann.strokeWidth, ann.strokeWidth * 2] : undefined
               for (let ei = 0; ei < ann.points.length; ei++) {
                 const start = ann.points[ei]
                 const end = ann.points[(ei + 1) % ann.points.length]
@@ -3973,8 +4107,11 @@ export default function PdfAnnotateTool() {
                   const sx = start.x + ddx * i, sy = start.y + ddy * i
                   const ex = start.x + ddx * (i + 1), ey = start.y + ddy * (i + 1)
                   const mx = (sx + ex) / 2 + nx, my = (sy + ey) / 2 + ny
-                  page.drawLine({ start: toPC({ x: sx, y: sy }), end: toPC({ x: mx, y: my }), thickness: ann.strokeWidth, color: c, opacity: ann.opacity })
-                  page.drawLine({ start: toPC({ x: mx, y: my }), end: toPC({ x: ex, y: ey }), thickness: ann.strokeWidth, color: c, opacity: ann.opacity })
+                  const lineOpts1: Record<string, unknown> = { start: toPC({ x: sx, y: sy }), end: toPC({ x: mx, y: my }), thickness: ann.strokeWidth, color: c, opacity: ann.opacity }
+                  const lineOpts2: Record<string, unknown> = { start: toPC({ x: mx, y: my }), end: toPC({ x: ex, y: ey }), thickness: ann.strokeWidth, color: c, opacity: ann.opacity }
+                  if (cloudDash) { lineOpts1.dashArray = cloudDash; lineOpts2.dashArray = cloudDash }
+                  page.drawLine(lineOpts1 as unknown as Parameters<typeof page.drawLine>[0])
+                  page.drawLine(lineOpts2 as unknown as Parameters<typeof page.drawLine>[0])
                 }
               }
               break
@@ -3983,12 +4120,23 @@ export default function PdfAnnotateTool() {
               if (ann.points.length < 2) break
               const [c1, c2] = ann.points
               const center = toPC({ x: (c1.x + c2.x) / 2, y: (c1.y + c2.y) / 2 })
-              page.drawEllipse({
+              const ellipseOpts: Record<string, unknown> = {
                 x: center.x, y: center.y,
                 xScale: Math.abs(c2.x - c1.x) / 2,
                 yScale: Math.abs(c2.y - c1.y) / 2,
                 borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
-              })
+              }
+              if (ann.fillColor) {
+                const fc = ann.fillColor
+                const fr = parseInt(fc.slice(1, 3), 16) / 255
+                const fg = parseInt(fc.slice(3, 5), 16) / 255
+                const fb = parseInt(fc.slice(5, 7), 16) / 255
+                ellipseOpts.color = rgb(fr, fg, fb)
+                ellipseOpts.opacity = ann.opacity
+              }
+              if (ann.dashPattern === 'dashed') ellipseOpts.borderDashArray = [ann.strokeWidth * 3, ann.strokeWidth * 2]
+              else if (ann.dashPattern === 'dotted') ellipseOpts.borderDashArray = [ann.strokeWidth, ann.strokeWidth * 2]
+              page.drawEllipse(ellipseOpts as Parameters<typeof page.drawEllipse>[0])
               break
             }
             case 'text': {
@@ -4573,6 +4721,80 @@ export default function PdfAnnotateTool() {
                 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
             <span className="text-[10px] text-white/40 w-6">{opacity}%</span>
           </div>
+        )}
+
+        {/* Fill color — shapes only */}
+        {(activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'cloud' ||
+          (activeTool === 'select' && selectedAnn && (selectedAnn.type === 'rectangle' || selectedAnn.type === 'circle' || selectedAnn.type === 'cloud'))) && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-white/40">Fill</span>
+            <input type="color" value={fillColor || '#ffffff'}
+              onChange={e => {
+                setFillColor(e.target.value)
+                if (selectedAnnId) updateAnnotation(selectedAnnId, { fillColor: e.target.value })
+              }}
+              className="w-5 h-5 rounded cursor-pointer border border-white/[0.1] bg-transparent p-0"
+            />
+            <button
+              onClick={() => {
+                setFillColor(null)
+                if (selectedAnnId) updateAnnotation(selectedAnnId, { fillColor: undefined })
+              }}
+              className={`px-1 py-0.5 rounded text-[9px] font-medium transition-colors ${
+                !fillColor ? 'bg-white/10 text-white/60' : 'text-white/30 hover:text-white/50 border border-white/[0.08]'
+              }`}>
+              None
+            </button>
+          </div>
+        )}
+
+        {/* Corner radius — rectangle only */}
+        {(activeTool === 'rectangle' || (activeTool === 'select' && selectedAnn?.type === 'rectangle')) && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-white/40">Radius</span>
+            <input type="range" min={0} max={30} value={cornerRadius}
+              onChange={e => {
+                const val = Number(e.target.value)
+                setCornerRadius(val)
+                if (selectedAnnId) updateAnnotation(selectedAnnId, { cornerRadius: val })
+              }}
+              className="w-12 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F47B20] [&::-webkit-slider-thumb]:cursor-pointer" />
+            <span className="text-[10px] text-white/40 w-4">{cornerRadius}</span>
+          </div>
+        )}
+
+        {/* Dash pattern — shapes/lines */}
+        {(activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'line' || activeTool === 'arrow' || activeTool === 'cloud' ||
+          (activeTool === 'select' && selectedAnn && ['rectangle', 'circle', 'line', 'arrow', 'cloud'].includes(selectedAnn.type))) && (
+          <div className="flex items-center gap-0.5">
+            {(['solid', 'dashed', 'dotted'] as const).map(dp => (
+              <button key={dp} onClick={() => {
+                setDashPattern(dp)
+                if (selectedAnnId) updateAnnotation(selectedAnnId, { dashPattern: dp === 'solid' ? undefined : dp })
+              }}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors ${
+                  dashPattern === dp ? 'bg-[#F47B20]/20 text-[#F47B20] border border-[#F47B20]/30' : 'text-white/30 hover:text-white/50 border border-white/[0.08]'
+                }`}>
+                {dp === 'solid' ? '━' : dp === 'dashed' ? '╌' : '┈'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Double-headed arrow */}
+        {(activeTool === 'arrow' || (activeTool === 'select' && selectedAnn?.type === 'arrow')) && (
+          <button onClick={() => {
+            setArrowStart(!arrowStart)
+            if (selectedAnnId) updateAnnotation(selectedAnnId, { arrowStart: !arrowStart })
+          }}
+            title={arrowStart ? 'Double-headed arrow' : 'Single arrow'}
+            className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors ${
+              arrowStart ? 'bg-[#F47B20]/20 text-[#F47B20] border border-[#F47B20]/30' : 'text-white/30 hover:text-white/50 border border-white/[0.08]'
+            }`}>
+            {arrowStart ? '↔' : '→'}
+          </button>
         )}
 
         {/* Straight-line mode */}
