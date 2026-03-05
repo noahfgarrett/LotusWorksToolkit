@@ -6,7 +6,7 @@ import { ColorPicker } from '@/components/common/ColorPicker.tsx'
 import { useAppStore } from '@/stores/appStore.ts'
 import { loadPDFFile, renderPageToCanvas, generateThumbnail, removePDFFromCache, getPDFBytes, extractPositionedText, getAllPageDimensions } from '@/utils/pdf.ts'
 import { downloadBlob } from '@/utils/download.ts'
-import { saveSession, loadSession, clearSession } from './storage.ts'
+import { saveSession, loadSession, clearSession, computeFileHash } from './storage.ts'
 import type { PdfAnnotateSession } from './storage.ts'
 import { formatFileSize } from '@/utils/fileReader.ts'
 import type { PDFFile } from '@/types'
@@ -35,6 +35,7 @@ import {
   snapToContent, rotatePoint,
   isPointInAnyTextItem, findIntersectingTextItems, flowSelectTextItems,
   hitTestMeasurementLabel,
+  decimatePoints,
 } from './geometry.ts'
 import {
   drawCloudEdge, drawSmoothPath, drawAnnotation, drawSelectionUI, drawMeasurement,
@@ -229,6 +230,7 @@ export default function PdfAnnotateTool() {
   const currentPtsRef = useRef<Point[]>([])
   const pdfFileRef = useRef(pdfFile)
   pdfFileRef.current = pdfFile
+  const fileHashRef = useRef<string | null>(null)
   const pageRotationsRef = useRef(pageRotations)
   pageRotationsRef.current = pageRotations
   const [dimsReady, setDimsReady] = useState(0)
@@ -865,9 +867,14 @@ export default function PdfAnnotateTool() {
       maxCanvasWidthRef.current = maxW
       setDimsReady(v => v + 1)
 
+      // Compute file hash for session matching
+      const hash = await computeFileHash(file)
+      fileHashRef.current = hash
+
       // Restore session if file matches
       const session = loadSession()
-      if (session?.version === 1 && session.file.fileName === file.name && session.file.fileSize === file.size) {
+      const hashMatch = !session?.fileHash || session.fileHash === hash
+      if (session?.version === 1 && session.file.fileName === file.name && session.file.fileSize === file.size && hashMatch) {
         setAnnotations(session.annotations as PageAnnotations)
         setMeasurements(session.measurements as Record<number, Measurement[]>)
         setPageRotations(session.pageRotations)
@@ -915,6 +922,7 @@ export default function PdfAnnotateTool() {
         saveSession({
           version: 1,
           file: { fileName: f.name, fileSize: f.size },
+          fileHash: fileHashRef.current ?? undefined,
           annotations, measurements, pageRotations, calibration,
           zoom, scrollTop: el?.scrollTop ?? 0, scrollLeft: el?.scrollLeft ?? 0, currentPage,
           color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
@@ -938,6 +946,7 @@ export default function PdfAnnotateTool() {
       saveSession({
         version: 1,
         file: { fileName: pdfFile.name, fileSize: pdfFile.size },
+        fileHash: fileHashRef.current ?? undefined,
         annotations, measurements, pageRotations, calibration,
         zoom, scrollTop: el?.scrollTop ?? 0, scrollLeft: el?.scrollLeft ?? 0, currentPage,
         color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
@@ -2599,10 +2608,12 @@ export default function PdfAnnotateTool() {
     }
 
     const isHL = activeTool === 'highlighter'
+    const isPencilOrHL = activeTool === 'pencil' || isHL
+    const finalPts = isPencilOrHL ? decimatePoints([...pts], isHL ? 1.0 : 0.5) : [...pts]
     const ann: Annotation = {
       id: genId(),
       type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough'>,
-      points: [...pts],
+      points: finalPts,
       color,
       strokeWidth: isHL ? strokeWidth * 3 : strokeWidth,
       opacity: isHL ? 0.4 : opacity / 100,

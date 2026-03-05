@@ -9,6 +9,7 @@ const SESSION_KEY = 'lwt-pdf-annotate-session'
 export interface PdfAnnotateSession {
   version: 1
   file: { fileName: string; fileSize: number }
+  fileHash?: string
   // User work
   annotations: Record<number, unknown[]>
   measurements: Record<number, unknown[]>
@@ -66,4 +67,17 @@ export function clearSession(): void {
   } catch {
     // ignore
   }
+}
+
+/** Hash the first 64 KB of a file for fast identity matching. */
+export async function computeFileHash(file: File): Promise<string> {
+  const chunk = file.slice(0, 65536)
+  const buffer = await chunk.arrayBuffer()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  const bytes = new Uint8Array(hashBuffer)
+  let hex = ''
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, '0')
+  }
+  return hex
 }
