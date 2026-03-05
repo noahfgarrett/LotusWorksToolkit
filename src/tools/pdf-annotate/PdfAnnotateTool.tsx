@@ -1759,10 +1759,12 @@ export default function PdfAnnotateTool() {
           setSubscript(hitAnn.subscript || false)
           setListType(hitAnn.listType || 'none')
         }
-        // Click text/callout → select only (double-click to edit handled above when already selected)
+        // Click text/callout → double-click edits, single-click selects + moves
         if (hitAnn.type === 'text' || hitAnn.type === 'callout') {
-          // Start move drag on single click
-          if (hitAnn.width && hitAnn.height) {
+          if (isDoubleClick) {
+            setActiveTool(hitAnn.type === 'callout' ? 'callout' : 'text')
+            enterEditMode(hitAnn.id)
+          } else if (hitAnn.width && hitAnn.height) {
             isDrawingRef.current = true
             textDragRef.current = {
               mode: 'move', startPt: pt,
@@ -1913,20 +1915,11 @@ export default function PdfAnnotateTool() {
         }
       }
 
-      // Check if clicking on an existing callout → select + move (double-click to edit)
+      // Check if clicking on an existing callout → single-click edits (callout tool is active)
       const hitCallout = findCalloutAt(pt)
       if (hitCallout) {
         setSelectedAnnId(hitCallout.id)
-        if (isDoubleClick) {
-          enterEditMode(hitCallout.id)
-        } else if (hitCallout.width && hitCallout.height) {
-          isDrawingRef.current = true
-          textDragRef.current = {
-            mode: 'move', startPt: pt,
-            origPoints: [...hitCallout.points], origWidth: hitCallout.width, origHeight: hitCallout.height,
-            origArrows: hitCallout.arrows ? [...hitCallout.arrows] : undefined,
-          }
-        }
+        enterEditMode(hitCallout.id)
         return
       }
 
@@ -1970,19 +1963,11 @@ export default function PdfAnnotateTool() {
         }
       }
 
-      // Check if clicking on any text annotation → select + move (double-click to edit)
+      // Check if clicking on any text annotation → single-click edits (text tool is active)
       const hitAnn = findTextAnnotationAt(pt)
       if (hitAnn) {
         setSelectedAnnId(hitAnn.id)
-        if (isDoubleClick) {
-          enterEditMode(hitAnn.id)
-        } else if (hitAnn.width && hitAnn.height) {
-          isDrawingRef.current = true
-          textDragRef.current = {
-            mode: 'move', startPt: pt,
-            origPoints: [...hitAnn.points], origWidth: hitAnn.width, origHeight: hitAnn.height,
-          }
-        }
+        enterEditMode(hitAnn.id)
         return
       }
 

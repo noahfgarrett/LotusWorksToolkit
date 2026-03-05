@@ -40,7 +40,7 @@ export function UpdateModal({ open, onClose, info }: UpdateModalProps) {
         {/* Release notes */}
         {renderedNotes && (
           <div
-            className="prose prose-invert prose-sm max-h-60 overflow-y-auto rounded-lg bg-white/[0.03] border border-white/[0.06] p-4 text-sm text-white/70 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_a]:text-[#F47B20] [&_ul]:pl-4 [&_ol]:pl-4"
+            className="prose prose-invert prose-sm max-h-60 overflow-y-auto overscroll-contain rounded-lg bg-white/[0.03] border border-white/[0.06] p-4 text-sm text-white/70 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_a]:text-[#F47B20] [&_ul]:pl-5 [&_ul]:list-disc [&_ol]:pl-5 [&_ol]:list-decimal [&_li]:my-0.5 [&_li]:marker:text-white/40"
             dangerouslySetInnerHTML={{ __html: renderedNotes }}
           />
         )}

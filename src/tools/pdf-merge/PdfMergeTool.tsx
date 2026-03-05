@@ -546,10 +546,63 @@ export default function PdfMergeTool() {
     )
   }
 
+  /* ── Native file drop on the main view ── */
+
+  const [fileDragOver, setFileDragOver] = useState(false)
+  const fileDragCounterRef = useRef(0)
+
+  const onNativeFileDragEnter = useCallback((e: React.DragEvent) => {
+    // Only respond to external file drops, not internal dnd-kit drags
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    fileDragCounterRef.current++
+    setFileDragOver(true)
+  }, [])
+
+  const onNativeFileDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const onNativeFileDragLeave = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    fileDragCounterRef.current--
+    if (fileDragCounterRef.current <= 0) {
+      fileDragCounterRef.current = 0
+      setFileDragOver(false)
+    }
+  }, [])
+
+  const onNativeFileDrop = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    fileDragCounterRef.current = 0
+    setFileDragOver(false)
+    const droppedFiles = Array.from(e.dataTransfer.files)
+    if (droppedFiles.length > 0) handleFiles(droppedFiles)
+  }, [handleFiles])
+
   /* ── Render: main view ── */
 
   return (
-    <div className="h-full min-h-0 flex flex-col gap-4">
+    <div
+      className="h-full min-h-0 flex flex-col gap-4 relative"
+      onDragEnter={onNativeFileDragEnter}
+      onDragOver={onNativeFileDragOver}
+      onDragLeave={onNativeFileDragLeave}
+      onDrop={onNativeFileDrop}
+    >
+      {/* File drop overlay */}
+      {fileDragOver && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-[#F47B20] bg-[#F47B20]/10 backdrop-blur-sm pointer-events-none">
+          <div className="text-center">
+            <Plus size={32} className="mx-auto text-[#F47B20] mb-2" />
+            <p className="text-sm font-medium text-[#F47B20]">Drop PDFs to add</p>
+          </div>
+        </div>
+      )}
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-shrink-0">
         <span className="text-sm text-white/60">
