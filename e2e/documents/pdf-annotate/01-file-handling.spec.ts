@@ -318,9 +318,11 @@ test.describe('New/Reset', () => {
 
   test('New button triggers confirm dialog', async ({ page }) => {
     await uploadPDFAndWait(page)
-    // Set up dialog handler to accept
-    page.on('dialog', dialog => dialog.accept())
     await page.getByText('New').click()
+    // Modal should appear
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    // Click Discard All to confirm
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     // After accepting, should return to empty state
     await expect(page.getByText('Drop a PDF file here')).toBeVisible()
@@ -328,10 +330,11 @@ test.describe('New/Reset', () => {
 
   test('dismissing confirm dialog cancels reset', async ({ page }) => {
     await uploadPDFAndWait(page)
-    // Set up dialog handler to dismiss
-    page.on('dialog', dialog => dialog.dismiss())
     await page.getByText('New').click()
-    await page.waitForTimeout(500)
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    // Cancel the modal
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await page.waitForTimeout(200)
     // Should still show the canvas
     await expect(page.locator('canvas').first()).toBeVisible()
   })
@@ -340,8 +343,9 @@ test.describe('New/Reset', () => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'rectangle')
     expect(await getAnnotationCount(page)).toBe(1)
-    page.on('dialog', dialog => dialog.accept())
     await page.getByText('New').click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     // Upload again
     await uploadPDFAndWait(page)
@@ -350,8 +354,9 @@ test.describe('New/Reset', () => {
 
   test('reset returns to drop zone', async ({ page }) => {
     await uploadPDFAndWait(page)
-    page.on('dialog', dialog => dialog.accept())
     await page.getByText('New').click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     await expect(page.getByText('Drop a PDF file here')).toBeVisible()
     await expect(page.locator('canvas')).toHaveCount(0)
@@ -399,9 +404,10 @@ test.describe('Session Persistence', () => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'rectangle')
     await waitForSessionSave(page)
-    // Reset (accept the confirm dialog)
-    page.on('dialog', dialog => dialog.accept())
+    // Reset via styled modal
     await page.getByText('New').click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(300)
     // Manually set session data to simulate previous session
     await page.evaluate(() => {
@@ -510,15 +516,14 @@ test.describe('New/Reset With Annotations', () => {
   test('New button with annotations shows discard confirm dialog', async ({ page }) => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'rectangle')
-    let dialogMessage = ''
-    page.on('dialog', async dialog => {
-      dialogMessage = dialog.message()
-      await dialog.dismiss()
-    })
     await page.getByText('New').click()
-    await page.waitForTimeout(500)
-    expect(dialogMessage).toContain('Discard all annotations')
-    // Still shows the PDF since we dismissed
+    // Styled modal should appear
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await expect(page.locator('p', { hasText: 'Discard all annotations' })).toBeVisible()
+    // Cancel the modal
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await page.waitForTimeout(200)
+    // Still shows the PDF since we cancelled
     await expect(page.locator('canvas').first()).toBeVisible()
   })
 
@@ -526,8 +531,9 @@ test.describe('New/Reset With Annotations', () => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'rectangle')
     expect(await getAnnotationCount(page)).toBe(1)
-    page.on('dialog', dialog => dialog.accept())
     await page.getByText('New').click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     // Should return to the upload drop zone
     await expect(page.getByText('Drop a PDF file here')).toBeVisible()
@@ -536,9 +542,10 @@ test.describe('New/Reset With Annotations', () => {
   test('dismissing New keeps current PDF and annotations', async ({ page }) => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'rectangle')
-    page.on('dialog', dialog => dialog.dismiss())
     await page.getByText('New').click()
-    await page.waitForTimeout(500)
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await page.waitForTimeout(200)
     // Should still show original file with annotation
     await expect(page.getByText('sample.pdf')).toBeVisible()
     expect(await getAnnotationCount(page)).toBe(1)
@@ -547,8 +554,9 @@ test.describe('New/Reset With Annotations', () => {
   test('after reset, can upload a new PDF', async ({ page }) => {
     await uploadPDFAndWait(page, 'sample.pdf')
     await createAnnotation(page, 'rectangle')
-    page.on('dialog', dialog => dialog.accept())
     await page.getByText('New').click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     // Now upload a different file
     await uploadPDFAndWait(page, 'single-page.pdf')

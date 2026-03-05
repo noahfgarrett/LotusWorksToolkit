@@ -45,11 +45,57 @@ export async function selectTool(page: Page, toolTitle: string) {
   await page.waitForTimeout(100)
 }
 
+/** Get the current page's annotation canvas locator */
+function getAnnotationCanvas(page: Page) {
+  // For single-page PDFs, canvas.nth(1) works. For multi-page, we need to
+  // find the correct page's annotation canvas. The app renders all pages
+  // stacked vertically with data-page attributes.
+  // Try the data-page approach first, fall back to nth(1) for single-page.
+  return page.locator('canvas.ann-canvas').first()
+}
+
+/** Get the annotation canvas for a specific page number */
+function getAnnotationCanvasForPage(page: Page, pageNum: number) {
+  return page.locator(`[data-page="${pageNum}"] canvas.ann-canvas`)
+}
+
+/** Get the current page number from the page input */
+async function getCurrentPageNum(page: Page): Promise<number> {
+  const input = page.locator('input[type="number"]')
+  const count = await input.count()
+  if (count === 0) return 1 // single-page PDF
+  const val = await input.inputValue()
+  return parseInt(val) || 1
+}
+
+/** Get the annotation canvas for the currently displayed page, ensuring it's scrolled into view */
+async function getCurrentAnnotationCanvas(page: Page) {
+  const pageNum = await getCurrentPageNum(page)
+  // Find the canvas index for this page number
+  // Each page has 2 canvases (pdf-canvas, ann-canvas), so page N's ann-canvas is at index (N-1)*2+1
+  const annCanvasIndex = (pageNum - 1) * 2 + 1
+  const canvas = page.locator('canvas').nth(annCanvasIndex)
+  const count = await canvas.count()
+  if (count > 0) {
+    // Ensure canvas is in viewport
+    await canvas.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(150)
+    return canvas
+  }
+  // Fallback
+  return page.locator('canvas').nth(1)
+}
+
 /** Draw on canvas by simulating pointer events at given points */
 export async function drawOnCanvas(page: Page, points: { x: number; y: number }[]) {
   if (points.length < 2) return
-  const canvas = page.locator('canvas').nth(1) // annotation canvas is the second canvas
-  const box = await canvas.boundingBox()
+  const canvas = await getCurrentAnnotationCanvas(page)
+  let box = await canvas.boundingBox()
+  // If canvas Y is negative, it's not properly scrolled into view — retry
+  if (box && box.y < 0) {
+    await page.waitForTimeout(200)
+    box = await canvas.boundingBox()
+  }
   if (!box) throw new Error('Canvas not found')
 
   const toAbsolute = (pt: { x: number; y: number }) => ({
@@ -76,7 +122,7 @@ export async function getAnnotationCount(page: Page): Promise<number> {
 
 /** Click at a specific point on the annotation canvas */
 export async function clickCanvasAt(page: Page, x: number, y: number) {
-  const canvas = page.locator('canvas').nth(1)
+  const canvas = await getCurrentAnnotationCanvas(page)
   const box = await canvas.boundingBox()
   if (!box) throw new Error('Canvas not found')
   await page.mouse.click(box.x + x, box.y + y)
@@ -84,7 +130,7 @@ export async function clickCanvasAt(page: Page, x: number, y: number) {
 
 /** Double-click at a specific point on the annotation canvas */
 export async function doubleClickCanvasAt(page: Page, x: number, y: number) {
-  const canvas = page.locator('canvas').nth(1)
+  const canvas = await getCurrentAnnotationCanvas(page)
   const box = await canvas.boundingBox()
   if (!box) throw new Error('Canvas not found')
   await page.mouse.dblclick(box.x + x, box.y + y)
@@ -92,7 +138,7 @@ export async function doubleClickCanvasAt(page: Page, x: number, y: number) {
 
 /** Drag from one point to another on the annotation canvas */
 export async function dragOnCanvas(page: Page, from: { x: number; y: number }, to: { x: number; y: number }) {
-  const canvas = page.locator('canvas').nth(1)
+  const canvas = await getCurrentAnnotationCanvas(page)
   const box = await canvas.boundingBox()
   if (!box) throw new Error('Canvas not found')
   await page.mouse.move(box.x + from.x, box.y + from.y)
@@ -190,4 +236,43 @@ export async function moveAnnotation(page: Page, from: { x: number; y: number },
 export async function screenshotCanvas(page: Page) {
   const canvas = page.locator('canvas').first()
   return canvas.screenshot()
+}
+
+/** Navigate to a specific page number using the page input */
+export async function goToPage(page: Page, pageNum: number) {
+  const pageInput = page.locator('input[type="number"]')
+  const inputCount = await pageInput.count()
+  if (inputCount === 0) return // single-page PDF
+
+  await pageInput.fill(String(pageNum))
+  await pageInput.dispatchEvent('change')
+  await page.waitForTimeout(300)
+
+  // Scroll the target page into the visible area of the overflow container
+  await page.evaluate((pn) => {
+    const container = document.querySelector(`[data-page="${pn}"]`)
+    if (container) {
+      container.scrollIntoView({ behavior: 'instant', block: 'start' })
+    }
+  }, pageNum)
+  await page.waitForTimeout(300)
+
+  // Blur the input so keyboard shortcuts go to the canvas, not the input
+  await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null
+    if (el) el.blur()
+  })
+  await page.waitForTimeout(200)
+}
+
+/** Click Export PDF and wait for the download event */
+export async function exportPDF(page: Page, timeout = 15000) {
+  // Remove showSaveFilePicker so the app falls back to downloadBlob (anchor click)
+  await page.evaluate(() => {
+    delete (window as Record<string, unknown>)['showSaveFilePicker']
+  })
+  const downloadPromise = page.waitForEvent('download', { timeout })
+  const exportBtn = page.locator('button').filter({ hasText: 'Export PDF' })
+  await exportBtn.click()
+  return downloadPromise
 }

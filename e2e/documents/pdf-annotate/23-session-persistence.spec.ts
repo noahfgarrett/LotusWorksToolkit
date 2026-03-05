@@ -423,9 +423,10 @@ test.describe('Session — Clear and Reset', () => {
     await uploadPDFAndWait(page, 'sample.pdf')
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 120, h: 80 })
     await waitForSessionSave(page)
-    // Click "New" button — this triggers a confirm dialog
-    page.on('dialog', dialog => dialog.accept())
+    // Click "New" button — this triggers a styled confirm modal
     await page.locator('button:has-text("New")').click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     // Should return to empty state
     await expect(page.getByText('Drop a PDF file here')).toBeVisible()
