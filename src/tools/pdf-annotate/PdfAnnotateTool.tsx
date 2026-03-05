@@ -1707,10 +1707,19 @@ export default function PdfAnnotateTool() {
             }
             return
           }
-          // Click inside selected text/callout body → switch to tool and edit
+          // Click inside selected text/callout body → double-click edits, single-click moves
           if (hitTest(pt, ann, 4 / zoom)) {
-            setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
-            enterEditMode(ann.id)
+            if (isDoubleClick) {
+              setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
+              enterEditMode(ann.id)
+            } else {
+              isDrawingRef.current = true
+              textDragRef.current = {
+                mode: 'move', startPt: pt,
+                origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
+                origArrows: ann.arrows ? [...ann.arrows] : undefined,
+              }
+            }
             return
           }
         }
@@ -1742,18 +1751,23 @@ export default function PdfAnnotateTool() {
           setSubscript(hitAnn.subscript || false)
           setListType(hitAnn.listType || 'none')
         }
-        // Click text/callout → switch to text/callout tool and enter edit mode
-        if ((hitAnn.type === 'text' || hitAnn.type === 'callout') && hitAnn.width && hitAnn.height) {
-          setActiveTool(hitAnn.type === 'callout' ? 'callout' : 'text')
-          enterEditMode(hitAnn.id)
+        // Click text/callout → select only (double-click to edit handled above when already selected)
+        if (hitAnn.type === 'text' || hitAnn.type === 'callout') {
+          // Start move drag on single click
+          if (hitAnn.width && hitAnn.height) {
+            isDrawingRef.current = true
+            textDragRef.current = {
+              mode: 'move', startPt: pt,
+              origPoints: [...hitAnn.points], origWidth: hitAnn.width, origHeight: hitAnn.height,
+              origArrows: hitAnn.arrows ? [...hitAnn.arrows] : undefined,
+            }
+          }
           return
         }
-        if (hitAnn.type !== 'text' && hitAnn.type !== 'callout') {
-          // For non-text annotations, start general move drag
-          isDrawingRef.current = true
-          generalDragRef.current = {
-            annId: hitAnn.id, startPt: pt, origPoints: [...hitAnn.points],
-          }
+        // For non-text annotations, start general move drag
+        isDrawingRef.current = true
+        generalDragRef.current = {
+          annId: hitAnn.id, startPt: pt, origPoints: [...hitAnn.points],
         }
         return
       }
@@ -1853,9 +1867,18 @@ export default function PdfAnnotateTool() {
             return
           }
 
-          // Click inside box → enter edit mode
+          // Click inside box → double-click edits, single-click moves
           if (hitTestCalloutBox(pt, ann)) {
-            enterEditMode(ann.id)
+            if (isDoubleClick) {
+              enterEditMode(ann.id)
+            } else {
+              isDrawingRef.current = true
+              textDragRef.current = {
+                mode: 'move', startPt: pt,
+                origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
+                origArrows: ann.arrows ? [...ann.arrows] : undefined,
+              }
+            }
             return
           }
 
@@ -1882,11 +1905,20 @@ export default function PdfAnnotateTool() {
         }
       }
 
-      // Check if clicking on an existing callout → enter edit mode
+      // Check if clicking on an existing callout → select + move (double-click to edit)
       const hitCallout = findCalloutAt(pt)
       if (hitCallout) {
         setSelectedAnnId(hitCallout.id)
-        enterEditMode(hitCallout.id)
+        if (isDoubleClick) {
+          enterEditMode(hitCallout.id)
+        } else if (hitCallout.width && hitCallout.height) {
+          isDrawingRef.current = true
+          textDragRef.current = {
+            mode: 'move', startPt: pt,
+            origPoints: [...hitCallout.points], origWidth: hitCallout.width, origHeight: hitCallout.height,
+            origArrows: hitCallout.arrows ? [...hitCallout.arrows] : undefined,
+          }
+        }
         return
       }
 
@@ -1930,11 +1962,19 @@ export default function PdfAnnotateTool() {
         }
       }
 
-      // Check if clicking on any text annotation → enter edit mode
+      // Check if clicking on any text annotation → select + move (double-click to edit)
       const hitAnn = findTextAnnotationAt(pt)
       if (hitAnn) {
         setSelectedAnnId(hitAnn.id)
-        enterEditMode(hitAnn.id)
+        if (isDoubleClick) {
+          enterEditMode(hitAnn.id)
+        } else if (hitAnn.width && hitAnn.height) {
+          isDrawingRef.current = true
+          textDragRef.current = {
+            mode: 'move', startPt: pt,
+            origPoints: [...hitAnn.points], origWidth: hitAnn.width, origHeight: hitAnn.height,
+          }
+        }
         return
       }
 
