@@ -14,7 +14,13 @@ interface UpdateModalProps {
 export function UpdateModal({ open, onClose, info }: UpdateModalProps) {
   const renderedNotes = useMemo(() => {
     if (!info.releaseNotes) return ''
-    return marked.parse(info.releaseNotes, { async: false }) as string
+    let html = marked.parse(info.releaseNotes, { async: false }) as string
+    // Inject inline styles so bullets render regardless of which CSS version the user has
+    html = html
+      .replace(/<ul>/g, '<ul style="list-style-type:disc;padding-left:1.25rem">')
+      .replace(/<ol>/g, '<ol style="list-style-type:decimal;padding-left:1.25rem">')
+      .replace(/<li>/g, '<li style="margin:0.25rem 0">')
+    return html
   }, [info.releaseNotes])
 
   function handleDownload() {
