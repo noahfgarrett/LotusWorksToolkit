@@ -7,8 +7,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 2,
+  workers: 1,
+  timeout: 30_000,
   reporter: 'html',
+  expect: { timeout: 10_000 },
   use: {
     baseURL: `http://localhost:${PORT}`,
     screenshot: 'only-on-failure',
@@ -25,6 +27,6 @@ export default defineConfig({
   webServer: {
     command: `npx vite --port ${PORT}`,
     url: `http://localhost:${PORT}`,
-    reuseExistingServer: false,
+    reuseExistingServer: true,
   },
 })

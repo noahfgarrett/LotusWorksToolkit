@@ -300,17 +300,19 @@ test.describe('Export — New Button', () => {
 
   test('New button returns to empty state when confirmed', async ({ page }) => {
     await uploadPDFAndWait(page, 'sample.pdf')
-    page.on('dialog', dialog => dialog.accept())
     await page.locator('button').filter({ hasText: 'New' }).click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     await expect(page.getByText('Drop a PDF file here')).toBeVisible()
   })
 
   test('New button does nothing when dialog is dismissed', async ({ page }) => {
     await uploadPDFAndWait(page, 'sample.pdf')
-    page.on('dialog', dialog => dialog.dismiss())
     await page.locator('button').filter({ hasText: 'New' }).click()
-    await page.waitForTimeout(500)
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await page.waitForTimeout(200)
     // Canvas should still be visible (did not reset)
     await expect(page.locator('canvas').first()).toBeVisible()
   })
@@ -319,8 +321,9 @@ test.describe('Export — New Button', () => {
     await uploadPDFAndWait(page, 'sample.pdf')
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 120, h: 80 })
     expect(await getAnnotationCount(page)).toBe(1)
-    page.on('dialog', dialog => dialog.accept())
     await page.locator('button').filter({ hasText: 'New' }).click()
+    await expect(page.locator('h2', { hasText: 'Start Over?' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard All' }).click()
     await page.waitForTimeout(500)
     await uploadPDFAndWait(page, 'sample.pdf')
     expect(await getAnnotationCount(page)).toBe(0)

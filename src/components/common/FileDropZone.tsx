@@ -46,6 +46,8 @@ export const FileDropZone = memo(function FileDropZone({
 
   const handleDragLeave = useCallback((e: DragEvent) => {
     e.preventDefault()
+    // Only reset if leaving the container (not entering a child element)
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
     setIsDragOver(false)
   }, [])
 
