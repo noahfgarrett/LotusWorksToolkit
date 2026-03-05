@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { marked } from 'marked'
-import { Download, ExternalLink, X } from 'lucide-react'
+import { Download, X } from 'lucide-react'
 import { Modal } from '@/components/common/Modal.tsx'
 import { Button } from '@/components/common/Button.tsx'
 import type { UpdateInfo } from '@/utils/updateChecker.ts'
@@ -21,14 +21,6 @@ export function UpdateModal({ open, onClose, info }: UpdateModalProps) {
     if (info.downloadUrl) {
       window.open(info.downloadUrl, '_blank', 'noopener')
     }
-  }
-
-  function handleViewOnGitHub() {
-    window.open(
-      `https://github.com/noahfgarrett/LotusWorksToolkit/releases/tag/v${info.version}`,
-      '_blank',
-      'noopener',
-    )
   }
 
   return (
@@ -65,15 +57,9 @@ export function UpdateModal({ open, onClose, info }: UpdateModalProps) {
           <Button variant="ghost" size="sm" onClick={onClose} icon={<X size={14} />}>
             Skip this version
           </Button>
-          {info.downloadUrl ? (
-            <Button variant="primary" size="sm" onClick={handleDownload} icon={<Download size={14} />}>
-              Download
-            </Button>
-          ) : (
-            <Button variant="primary" size="sm" onClick={handleViewOnGitHub} icon={<ExternalLink size={14} />}>
-              View on GitHub
-            </Button>
-          )}
+          <Button variant="primary" size="sm" onClick={handleDownload} disabled={!info.downloadUrl} icon={<Download size={14} />}>
+            Download v{info.version}
+          </Button>
         </div>
       </div>
     </Modal>

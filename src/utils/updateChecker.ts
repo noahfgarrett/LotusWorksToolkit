@@ -5,7 +5,7 @@ const TIMEOUT_MS = 5000
 export interface UpdateInfo {
   version: string
   releaseNotes: string
-  downloadUrl: string | null
+  downloadUrl: string
 }
 
 interface GitHubAsset {
@@ -61,10 +61,13 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       a.name.toLowerCase().endsWith('.html'),
     )
 
+    // Only show update if the HTML file is attached to the release
+    if (!htmlAsset) return null
+
     return {
       version: remoteVersion,
       releaseNotes: release.body ?? '',
-      downloadUrl: htmlAsset?.browser_download_url ?? null,
+      downloadUrl: htmlAsset.browser_download_url,
     }
   } catch {
     // Network error, timeout, offline — silently ignore
