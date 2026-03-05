@@ -2730,8 +2730,8 @@ export default function PdfAnnotateTool() {
     if ((activeTool === 'text' || activeTool === 'callout') && color === '#F47B20') setColor('#000000')
     // Text strikethrough: default to red
     if (activeTool === 'textStrikethrough' && (color === '#F47B20' || color === '#FFFF00')) setColor('#FF0000')
-    if (editingTextId) {
-      // Commit any open text edit
+    if (editingTextId && activeTool !== 'text' && activeTool !== 'callout') {
+      // Commit any open text edit when switching away from text tools
       commitTextEditing()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3016,7 +3016,14 @@ export default function PdfAnnotateTool() {
 
     // ── Callout tool ──
     if (activeTool === 'callout') {
-      if (editingTextId) commitTextEditing()
+      // If currently editing, check if click is inside the active callout — let textarea handle it
+      if (editingTextId) {
+        const editAnn = getAnnotation(editingTextId)
+        if (editAnn && hitTestCalloutBox(pt, editAnn)) {
+          return
+        }
+        commitTextEditing()
+      }
 
       // Check resize handles on selected callout
       if (selectedAnnId) {
@@ -3033,18 +3040,9 @@ export default function PdfAnnotateTool() {
             return
           }
 
-          // Click inside box → double-click to edit, single-click allows drag
+          // Click inside box → enter edit mode
           if (hitTestCalloutBox(pt, ann)) {
-            if (isDoubleClick) {
-              enterEditMode(ann.id)
-            }
-            setSelectedArrowIdx(null)
-            isDrawingRef.current = true
-            textDragRef.current = {
-              mode: 'move', startPt: pt,
-              origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
-              origArrows: ann.arrows ? [...ann.arrows] : undefined,
-            }
+            enterEditMode(ann.id)
             return
           }
 
@@ -3071,24 +3069,11 @@ export default function PdfAnnotateTool() {
         }
       }
 
-      // Check if clicking on an existing callout
+      // Check if clicking on an existing callout → enter edit mode
       const hitCallout = findCalloutAt(pt)
       if (hitCallout) {
-        if (hitCallout.id !== selectedAnnId) {
-          setSelectedAnnId(hitCallout.id)
-        }
-        // Double-click → edit mode; single-click → allow drag
-        if (isDoubleClick) {
-          enterEditMode(hitCallout.id)
-        }
-        if (hitCallout.width && hitCallout.height) {
-          isDrawingRef.current = true
-          textDragRef.current = {
-            mode: 'move', startPt: pt,
-            origPoints: [...hitCallout.points], origWidth: hitCallout.width, origHeight: hitCallout.height,
-            origArrows: hitCallout.arrows ? [...hitCallout.arrows] : undefined,
-          }
-        }
+        setSelectedAnnId(hitCallout.id)
+        enterEditMode(hitCallout.id)
         return
       }
 
@@ -3101,8 +3086,14 @@ export default function PdfAnnotateTool() {
 
     // ── Text tool: PowerPoint-style ──
     if (activeTool === 'text') {
-      // If editing, commit first
+      // If currently editing, check if click is inside the active textbox — let textarea handle it
       if (editingTextId) {
+        const editAnn = getAnnotation(editingTextId)
+        if (editAnn && hitTest(pt, editAnn, 4)) {
+          // Click inside current editing textbox — do nothing, textarea handles cursor
+          return
+        }
+        // Clicked outside — commit and continue
         commitTextEditing()
       }
 
@@ -3123,37 +3114,14 @@ export default function PdfAnnotateTool() {
             }
             return
           }
-
-          // Check if clicking inside the selected textbox
-          if (hitTest(pt, ann, 4)) {
-            // Single-click on already-selected text → enter edit mode directly
-            enterEditMode(ann.id)
-            return
-          }
         }
       }
 
-      // Check if clicking on an existing text annotation
+      // Check if clicking on any text annotation → enter edit mode
       const hitAnn = findTextAnnotationAt(pt)
       if (hitAnn) {
-        if (hitAnn.id !== selectedAnnId) {
-          setSelectedAnnId(hitAnn.id)
-        }
-        // Double-click → edit mode; single-click → allow drag
-        if (isDoubleClick) {
-          enterEditMode(hitAnn.id)
-        }
-        // Start move drag
-        if (hitAnn.width && hitAnn.height) {
-          isDrawingRef.current = true
-          textDragRef.current = {
-            mode: 'move',
-            startPt: pt,
-            origPoints: [...hitAnn.points],
-            origWidth: hitAnn.width,
-            origHeight: hitAnn.height,
-          }
-        }
+        setSelectedAnnId(hitAnn.id)
+        enterEditMode(hitAnn.id)
         return
       }
 
