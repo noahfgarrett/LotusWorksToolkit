@@ -2909,7 +2909,7 @@ export default function PdfAnnotateTool() {
       // If editing text, commit first
       if (editingTextId) commitTextEditing()
 
-      // Check resize handles on selected text/callout
+      // Check resize handles or body click on selected text/callout
       if (selectedAnnId) {
         const ann = getAnnotation(selectedAnnId)
         if (ann && (ann.type === 'text' || ann.type === 'callout') && ann.width && ann.height) {
@@ -2922,6 +2922,12 @@ export default function PdfAnnotateTool() {
               origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
               origArrows: ann.arrows ? [...ann.arrows] : undefined,
             }
+            return
+          }
+          // Click inside selected text/callout body → switch to tool and edit
+          if (hitTest(pt, ann, 4)) {
+            setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
+            enterEditMode(ann.id)
             return
           }
         }
@@ -2946,19 +2952,13 @@ export default function PdfAnnotateTool() {
           setLineSpacing(hitAnn.lineHeight || 1.3)
           setTextAlign(hitAnn.textAlign || 'left')
         }
-        // Double-click text/callout -> edit mode
-        if ((hitAnn.type === 'text' || hitAnn.type === 'callout') && isDoubleClick) {
-          enterEditMode(hitAnn.id)
-        }
-        // Start move drag for text/callout
+        // Click text/callout → switch to text/callout tool and enter edit mode
         if ((hitAnn.type === 'text' || hitAnn.type === 'callout') && hitAnn.width && hitAnn.height) {
-          isDrawingRef.current = true
-          textDragRef.current = {
-            mode: 'move', startPt: pt,
-            origPoints: [...hitAnn.points], origWidth: hitAnn.width, origHeight: hitAnn.height,
-            origArrows: hitAnn.arrows ? [...hitAnn.arrows] : undefined,
-          }
-        } else if (hitAnn.type !== 'text' && hitAnn.type !== 'callout') {
+          setActiveTool(hitAnn.type === 'callout' ? 'callout' : 'text')
+          enterEditMode(hitAnn.id)
+          return
+        }
+        if (hitAnn.type !== 'text' && hitAnn.type !== 'callout') {
           // For non-text annotations, start general move drag
           isDrawingRef.current = true
           generalDragRef.current = {
@@ -3314,13 +3314,20 @@ export default function PdfAnnotateTool() {
           const handleThreshold = HANDLE_SIZE / zoom + 4
           const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
           if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
-          if (hitTest(hoverPt, selAnn, 4)) { setCanvasCursor('move'); return }
+          if (hitTest(hoverPt, selAnn, 4)) {
+            setCanvasCursor((selAnn.type === 'text' || selAnn.type === 'callout') ? 'text' : 'move')
+            return
+          }
         }
       }
       // 2. Check if hovering over any annotation
       const hoveredAnn = findAnnotationAt(hoverPt, pageNum)
       setHoveredAnnId(hoveredAnn?.id ?? null)
-      if (hoveredAnn) { setCanvasCursor('move'); return }
+      if (hoveredAnn) {
+        // Show I-beam for text/callout annotations, move for everything else
+        setCanvasCursor((hoveredAnn.type === 'text' || hoveredAnn.type === 'callout') ? 'text' : 'move')
+        return
+      }
       // 3. Check if hovering over embedded PDF text → I-beam
       const currentRotation = pageRotationsRef.current[pageNum] || 0
       const cacheKey = `${pageNum}_${currentRotation}`
