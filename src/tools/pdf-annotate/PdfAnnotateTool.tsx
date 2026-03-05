@@ -16,7 +16,8 @@ import {
   Eraser, Highlighter,
   ZoomIn, ZoomOut, Maximize, ChevronDown, ChevronLeft, ChevronRight, PanelLeft,
   X, Ruler, TextSelect, MousePointer2, Strikethrough, Paintbrush,
-  Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight,
+  Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight, AlignJustify,
+  Superscript, Subscript, List, ListOrdered,
 } from 'lucide-react'
 
 // ── Extracted modules ─────────────────────────────────
@@ -40,6 +41,7 @@ import {
 import {
   drawCloudEdge, drawSmoothPath, drawAnnotation, drawSelectionUI, drawMeasurement,
 } from './drawing.ts'
+import FloatingToolbar from './FloatingToolbar.tsx'
 
 // ── Thumbnail sidebar item ──────────────────────────────
 
@@ -121,7 +123,10 @@ export default function PdfAnnotateTool() {
   const [strikethrough, setStrikethrough] = useState(false)
   const [textBgColor, setTextBgColor] = useState<string | null>(null)
   const [lineSpacing, setLineSpacing] = useState(1.3)
-  const [textAlign, setTextAlign] = useState<'left' | 'center' | 'right'>('left')
+  const [textAlign, setTextAlign] = useState<'left' | 'center' | 'right' | 'justify'>('left')
+  const [superscript, setSuperscript] = useState(false)
+  const [subscript, setSubscript] = useState(false)
+  const [listType, setListType] = useState<'none' | 'bullet' | 'numbered'>('none')
   const [canvasCursor, setCanvasCursor] = useState<string | null>(null)
   const [selectTextToolbar, setSelectTextToolbar] = useState<{
     rects: { x: number; y: number; w: number; h: number }[]
@@ -714,6 +719,9 @@ export default function PdfAnnotateTool() {
     setTextBgColor(ann.backgroundColor || null)
     setLineSpacing(ann.lineHeight || 1.3)
     setTextAlign(ann.textAlign || 'left')
+    setSuperscript(ann.superscript || false)
+    setSubscript(ann.subscript || false)
+    setListType(ann.listType || 'none')
     // Auto-focus textarea
     requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
   }, [annotations])
@@ -891,9 +899,12 @@ export default function PdfAnnotateTool() {
         setItalic(session.italic)
         setUnderline(session.underline)
         setStrikethrough(session.strikethrough)
-        setTextAlign(session.textAlign as 'left' | 'center' | 'right')
+        setTextAlign(session.textAlign as 'left' | 'center' | 'right' | 'justify')
         setTextBgColor(session.textBgColor)
         setLineSpacing(session.lineSpacing)
+        if (session.superscript !== undefined) setSuperscript(session.superscript)
+        if (session.subscript !== undefined) setSubscript(session.subscript)
+        if (session.listType !== undefined) setListType(session.listType as 'none' | 'bullet' | 'numbered')
         setEraserRadius(session.eraserRadius)
         setEraserMode(session.eraserMode as 'partial' | 'object')
         setActiveHighlight(session.activeHighlight as 'highlighter' | 'textHighlight' | 'textStrikethrough')
@@ -927,6 +938,7 @@ export default function PdfAnnotateTool() {
           zoom, scrollTop: el?.scrollTop ?? 0, scrollLeft: el?.scrollLeft ?? 0, currentPage,
           color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
           bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+          superscript, subscript, listType,
           eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
         } satisfies PdfAnnotateSession)
       }
@@ -936,6 +948,7 @@ export default function PdfAnnotateTool() {
   }, [annotations, measurements, pageRotations, calibration,
       zoom, currentPage, color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
       bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+      superscript, subscript, listType,
       eraserRadius, eraserMode, activeHighlight, activeDraw, activeText])
 
   // ── Debounced session save ─────────────────────────
@@ -951,6 +964,7 @@ export default function PdfAnnotateTool() {
         zoom, scrollTop: el?.scrollTop ?? 0, scrollLeft: el?.scrollLeft ?? 0, currentPage,
         color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
         bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+        superscript, subscript, listType,
         eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
       } satisfies PdfAnnotateSession)
     }, 1500)
@@ -958,6 +972,7 @@ export default function PdfAnnotateTool() {
   }, [pdfFile, annotations, measurements, pageRotations, calibration, zoom, currentPage,
       color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
       bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
+      superscript, subscript, listType,
       eraserRadius, eraserMode, activeHighlight, activeDraw, activeText])
 
   // ── Thumbnail loading ────────────────────────────────
@@ -1723,6 +1738,9 @@ export default function PdfAnnotateTool() {
           setTextBgColor(hitAnn.backgroundColor || null)
           setLineSpacing(hitAnn.lineHeight || 1.3)
           setTextAlign(hitAnn.textAlign || 'left')
+          setSuperscript(hitAnn.superscript || false)
+          setSubscript(hitAnn.subscript || false)
+          setListType(hitAnn.listType || 'none')
         }
         // Click text/callout → switch to text/callout tool and enter edit mode
         if ((hitAnn.type === 'text' || hitAnn.type === 'callout') && hitAnn.width && hitAnn.height) {
@@ -1954,6 +1972,9 @@ export default function PdfAnnotateTool() {
           setTextBgColor(hitAny.backgroundColor || null)
           setLineSpacing(hitAny.lineHeight || 1.3)
           setTextAlign(hitAny.textAlign || 'left')
+          setSuperscript(hitAny.superscript || false)
+          setSubscript(hitAny.subscript || false)
+          setListType(hitAny.listType || 'none')
         }
         // Double-click text/callout → edit mode
         if ((hitAny.type === 'text' || hitAny.type === 'callout') && isDoubleClick) {
@@ -2507,6 +2528,7 @@ export default function PdfAnnotateTool() {
           opacity: 1,
           text: '', width: boxW, height: boxH, arrows: [],
           bold, italic, underline, strikethrough, textAlign,
+          superscript, subscript, listType,
           backgroundColor: textBgColor || undefined, lineHeight: lineSpacing,
         }
         commitAnnotation(newAnn)
@@ -2551,6 +2573,7 @@ export default function PdfAnnotateTool() {
           width: boxW,
           height: boxH,
           bold, italic, underline, strikethrough, textAlign,
+          superscript, subscript, listType,
           backgroundColor: textBgColor || undefined, lineHeight: lineSpacing,
         }
         commitAnnotation(newAnn)
@@ -2879,9 +2902,19 @@ export default function PdfAnnotateTool() {
             }
             case 'text': {
               if (!ann.text || !ann.points.length) break
-              const fs = ann.fontSize || 16
+              const baseFsText = ann.fontSize || 16
+              const fs = ann.superscript || ann.subscript ? baseFsText * 0.6 : baseFsText
+              const yShift = ann.superscript ? -baseFsText * 0.4 : ann.subscript ? baseFsText * 0.2 : 0
               const pdfFont = await getFont(ann.fontFamily || 'Arial', ann.bold, ann.italic)
-              const lines = ann.width ? wrapText(ann.text, ann.width, fs, ann.bold, (t: string) => pdfFont.widthOfTextAtSize(t, fs)) : ann.text.split('\n')
+              // Apply list prefix
+              let exportText = ann.text
+              if (ann.listType && ann.listType !== 'none') {
+                exportText = ann.text.split('\n').map((line, idx) => {
+                  if (!line.trim()) return line
+                  return (ann.listType === 'bullet' ? '•  ' : `${idx + 1}.  `) + line
+                }).join('\n')
+              }
+              const lines = ann.width ? wrapText(exportText, ann.width, fs, ann.bold, (t: string) => pdfFont.widthOfTextAtSize(t, fs)) : exportText.split('\n')
               const tAlign = ann.textAlign || 'left'
               for (let i = 0; i < lines.length; i++) {
                 let xOff = 0
@@ -2890,7 +2923,7 @@ export default function PdfAnnotateTool() {
                   if (tAlign === 'center') xOff = (ann.width - tw) / 2
                   else if (tAlign === 'right') xOff = ann.width - tw
                 }
-                const linePt = toPC({ x: ann.points[0].x + xOff, y: ann.points[0].y + fs * (ann.lineHeight || 1.3) * i + fs })
+                const linePt = toPC({ x: ann.points[0].x + xOff, y: ann.points[0].y + yShift + fs * (ann.lineHeight || 1.3) * i + fs })
                 page.drawText(lines[i], {
                   x: linePt.x, y: linePt.y,
                   size: fs, font: pdfFont, color: c, opacity: ann.opacity,
@@ -2929,7 +2962,17 @@ export default function PdfAnnotateTool() {
               // Text inside box
               if (ann.text) {
                 const calloutFont = await getFont(ann.fontFamily || 'Arial', ann.bold, ann.italic)
-                const cLines = wrapText(ann.text, ann.width - 8, cfs, ann.bold, (t: string) => calloutFont.widthOfTextAtSize(t, cfs))
+                const baseCfs = cfs
+                const effectiveCfs = ann.superscript || ann.subscript ? baseCfs * 0.6 : baseCfs
+                const cYShift = ann.superscript ? -baseCfs * 0.4 : ann.subscript ? baseCfs * 0.2 : 0
+                let cExportText = ann.text
+                if (ann.listType && ann.listType !== 'none') {
+                  cExportText = ann.text.split('\n').map((line, idx) => {
+                    if (!line.trim()) return line
+                    return (ann.listType === 'bullet' ? '•  ' : `${idx + 1}.  `) + line
+                  }).join('\n')
+                }
+                const cLines = wrapText(cExportText, ann.width - 8, effectiveCfs, ann.bold, (t: string) => calloutFont.widthOfTextAtSize(t, effectiveCfs))
                 const cAlign = ann.textAlign || 'left'
                 for (let i = 0; i < cLines.length; i++) {
                   let cxOff = 4
@@ -2938,10 +2981,10 @@ export default function PdfAnnotateTool() {
                     if (cAlign === 'center') cxOff = 4 + (ann.width - 8 - ctw) / 2
                     else if (cAlign === 'right') cxOff = ann.width - 4 - ctw
                   }
-                  const lPt = toPC({ x: boxPt.x + cxOff, y: boxPt.y + 4 + cfs * (ann.lineHeight || 1.3) * i + cfs })
+                  const lPt = toPC({ x: boxPt.x + cxOff, y: boxPt.y + 4 + cYShift + effectiveCfs * (ann.lineHeight || 1.3) * i + effectiveCfs })
                   page.drawText(cLines[i], {
                     x: lPt.x, y: lPt.y,
-                    size: cfs, font: calloutFont, color: c, opacity: 1,
+                    size: effectiveCfs, font: calloutFont, color: c, opacity: 1,
                   })
                   if (ann.underline) {
                     const ctw = calloutFont.widthOfTextAtSize(cLines[i], cfs)
@@ -3614,6 +3657,7 @@ export default function PdfAnnotateTool() {
                 { align: 'left' as const, Icon: AlignLeft, label: 'Align Left' },
                 { align: 'center' as const, Icon: AlignCenter, label: 'Align Center' },
                 { align: 'right' as const, Icon: AlignRight, label: 'Align Right' },
+                { align: 'justify' as const, Icon: AlignJustify, label: 'Justify' },
               ] as const).map(({ align, Icon, label }) => (
                 <button key={align} onMouseDown={e => e.preventDefault()} onClick={() => {
                   setTextAlign(align)
@@ -3658,6 +3702,68 @@ export default function PdfAnnotateTool() {
                 <option key={v} value={v}>{v === 1.3 ? '1.3 (default)' : v.toString()}</option>
               ))}
             </select>
+            <div className="flex items-center gap-0.5">
+              <button onMouseDown={e => e.preventDefault()} onClick={() => {
+                const next = !superscript
+                setSuperscript(next)
+                if (next) setSubscript(false)
+                if (editingTextId) updateAnnotation(editingTextId, { superscript: next, ...(next ? { subscript: false } : {}) })
+                else if (selectedAnnId) {
+                  const ann = getAnnotation(selectedAnnId)
+                  if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { superscript: next, ...(next ? { subscript: false } : {}) })
+                }
+              }} title="Superscript"
+                className={`p-1 rounded transition-colors ${
+                  superscript ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+                }`}>
+                <Superscript size={13} />
+              </button>
+              <button onMouseDown={e => e.preventDefault()} onClick={() => {
+                const next = !subscript
+                setSubscript(next)
+                if (next) setSuperscript(false)
+                if (editingTextId) updateAnnotation(editingTextId, { subscript: next, ...(next ? { superscript: false } : {}) })
+                else if (selectedAnnId) {
+                  const ann = getAnnotation(selectedAnnId)
+                  if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { subscript: next, ...(next ? { superscript: false } : {}) })
+                }
+              }} title="Subscript"
+                className={`p-1 rounded transition-colors ${
+                  subscript ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+                }`}>
+                <Subscript size={13} />
+              </button>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <button onMouseDown={e => e.preventDefault()} onClick={() => {
+                const next = listType === 'bullet' ? 'none' : 'bullet'
+                setListType(next)
+                if (editingTextId) updateAnnotation(editingTextId, { listType: next })
+                else if (selectedAnnId) {
+                  const ann = getAnnotation(selectedAnnId)
+                  if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { listType: next })
+                }
+              }} title="Bullet list"
+                className={`p-1 rounded transition-colors ${
+                  listType === 'bullet' ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+                }`}>
+                <List size={13} />
+              </button>
+              <button onMouseDown={e => e.preventDefault()} onClick={() => {
+                const next = listType === 'numbered' ? 'none' : 'numbered'
+                setListType(next)
+                if (editingTextId) updateAnnotation(editingTextId, { listType: next })
+                else if (selectedAnnId) {
+                  const ann = getAnnotation(selectedAnnId)
+                  if (ann && (ann.type === 'text' || ann.type === 'callout')) updateAnnotation(selectedAnnId, { listType: next })
+                }
+              }} title="Numbered list"
+                className={`p-1 rounded transition-colors ${
+                  listType === 'numbered' ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/40 hover:text-white/70'
+                }`}>
+                <ListOrdered size={13} />
+              </button>
+            </div>
           </>
         )}
 
@@ -3870,6 +3976,77 @@ export default function PdfAnnotateTool() {
           </div>
         </div>
       </div>
+
+      {/* ── Floating formatting toolbar for text editing ────────── */}
+      {editingTextId && editingAnn && (() => {
+        const page = findAnnotationPage(editingTextId)
+        if (page === null) return null
+        const activeCanvas = pageRefsMap.current.get(page)?.annCanvas
+        if (!activeCanvas) return null
+        const canvasRect = activeCanvas.getBoundingClientRect()
+        const annX = editingAnn.points[0].x * RENDER_SCALE * zoom
+        const annY = editingAnn.points[0].y * RENDER_SCALE * zoom
+        const annW = (editingAnn.width || DEFAULT_TEXTBOX_W) * RENDER_SCALE * zoom
+        const screenCenterX = canvasRect.left + annX + annW / 2
+        const screenTopY = canvasRect.top + annY
+        const spaceAbove = screenTopY > 50
+        const toolbarX = Math.max(200, Math.min(window.innerWidth - 200, screenCenterX))
+        const toolbarY = spaceAbove ? screenTopY - 8 : screenTopY + (editingAnn.height || DEFAULT_TEXTBOX_H) * RENDER_SCALE * zoom + 8
+        return (
+          <div style={{ position: 'fixed', left: toolbarX, top: toolbarY, transform: `translateX(-50%)${spaceAbove ? ' translateY(-100%)' : ''}`, zIndex: 60 }}>
+            <FloatingToolbar
+              x={0} y={0}
+              anchor={spaceAbove ? 'above' : 'below'}
+              bold={bold} italic={italic} underline={underline} strikethrough={strikethrough}
+              superscript={superscript} subscript={subscript}
+              textAlign={textAlign} fontSize={fontSize} color={color} listType={listType}
+              visible={true}
+              onToggleBold={() => {
+                const v = !bold; setBold(v)
+                if (editingTextId) updateAnnotation(editingTextId, { bold: v })
+              }}
+              onToggleItalic={() => {
+                const v = !italic; setItalic(v)
+                if (editingTextId) updateAnnotation(editingTextId, { italic: v })
+              }}
+              onToggleUnderline={() => {
+                const v = !underline; setUnderline(v)
+                if (editingTextId) updateAnnotation(editingTextId, { underline: v })
+              }}
+              onToggleStrikethrough={() => {
+                const v = !strikethrough; setStrikethrough(v)
+                if (editingTextId) updateAnnotation(editingTextId, { strikethrough: v })
+              }}
+              onToggleSuperscript={() => {
+                const v = !superscript; setSuperscript(v)
+                if (v) setSubscript(false)
+                if (editingTextId) updateAnnotation(editingTextId, { superscript: v, ...(v ? { subscript: false } : {}) })
+              }}
+              onToggleSubscript={() => {
+                const v = !subscript; setSubscript(v)
+                if (v) setSuperscript(false)
+                if (editingTextId) updateAnnotation(editingTextId, { subscript: v, ...(v ? { superscript: false } : {}) })
+              }}
+              onSetTextAlign={(align) => {
+                setTextAlign(align)
+                if (editingTextId) updateAnnotation(editingTextId, { textAlign: align })
+              }}
+              onChangeFontSize={(size) => {
+                setFontSize(size)
+                if (editingTextId) updateAnnotation(editingTextId, { fontSize: size })
+              }}
+              onChangeColor={(c) => {
+                setColor(c)
+                if (editingTextId) updateAnnotation(editingTextId, { color: c })
+              }}
+              onSetListType={(lt) => {
+                setListType(lt)
+                if (editingTextId) updateAnnotation(editingTextId, { listType: lt })
+              }}
+            />
+          </div>
+        )
+      })()}
 
       {/* ── Floating text selection toolbar ────────── */}
       {selectTextToolbar && (() => {
