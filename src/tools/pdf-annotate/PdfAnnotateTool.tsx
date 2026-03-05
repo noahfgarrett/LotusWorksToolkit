@@ -1502,6 +1502,7 @@ export default function PdfAnnotateTool() {
   // Session restore
   const pendingScrollRef = useRef<{ scrollTop: number; scrollLeft: number } | null>(null)
   const restoringSessionRef = useRef(false)
+  const initialFitDoneRef = useRef(false)
 
   // Text highlight
   const textItemsCacheRef = useRef<Record<string, { text: string; x: number; y: number; width: number; height: number; page: number }[]>>({})
@@ -2095,6 +2096,7 @@ export default function PdfAnnotateTool() {
       selectTextStartRef.current = null
       selectTextRectsRef.current = []
       setSelectTextToolbar(null)
+      initialFitDoneRef.current = false
       // Clear multi-page refs
       pageRefsMap.current.clear()
       renderedPagesRef.current.clear()
@@ -2252,9 +2254,10 @@ export default function PdfAnnotateTool() {
       obs.observe(refs.container)
     }
 
-    // Restore scroll from session or fit to window on initial load
+    // Restore scroll from session or fit to window on initial load only
     if (restoringSessionRef.current) {
       restoringSessionRef.current = false
+      initialFitDoneRef.current = true
       setTimeout(() => {
         const el = scrollRef.current
         const pending = pendingScrollRef.current
@@ -2264,7 +2267,8 @@ export default function PdfAnnotateTool() {
           pendingScrollRef.current = null
         }
       }, 150)
-    } else {
+    } else if (!initialFitDoneRef.current) {
+      initialFitDoneRef.current = true
       requestAnimationFrame(() => fitToWindow())
     }
 
@@ -3122,18 +3126,8 @@ export default function PdfAnnotateTool() {
 
           // Check if clicking inside the selected textbox
           if (hitTest(pt, ann, 4)) {
-            // Double-click → edit mode; single-click → allow drag
-            if (isDoubleClick) {
-              enterEditMode(ann.id)
-            }
-            isDrawingRef.current = true
-            textDragRef.current = {
-              mode: 'move',
-              startPt: pt,
-              origPoints: [...ann.points],
-              origWidth: ann.width,
-              origHeight: ann.height,
-            }
+            // Single-click on already-selected text → enter edit mode directly
+            enterEditMode(ann.id)
             return
           }
         }
@@ -3290,14 +3284,22 @@ export default function PdfAnnotateTool() {
     }
 
     // ── Cursor tracking for handles/annotations ──
-    if (!isDrawingRef.current && (activeTool === 'text' || activeTool === 'callout') && selectedAnnId) {
+    if (!isDrawingRef.current && (activeTool === 'text' || activeTool === 'callout')) {
       const hoverPt = getPointForPage(pageNum, e)
-      const selAnn = (annotations[ap] || []).find(a => a.id === selectedAnnId)
-      if (selAnn) {
-        const handleThreshold = HANDLE_SIZE / zoom + 4
-        const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
-        if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
-        if (hitTest(hoverPt, selAnn, 4)) { setCanvasCursor('move'); return }
+      if (selectedAnnId) {
+        const selAnn = (annotations[ap] || []).find(a => a.id === selectedAnnId)
+        if (selAnn) {
+          const handleThreshold = HANDLE_SIZE / zoom + 4
+          const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
+          if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
+          if (hitTest(hoverPt, selAnn, 4)) { setCanvasCursor('move'); return }
+        }
+      }
+      // Check if hovering over any text/callout annotation
+      const targetType = activeTool === 'text' ? 'text' : 'callout'
+      const pageAnns = annotations[ap] || []
+      for (let i = pageAnns.length - 1; i >= 0; i--) {
+        if (pageAnns[i].type === targetType && hitTest(hoverPt, pageAnns[i], 4)) { setCanvasCursor('move'); return }
       }
       setCanvasCursor(null)
     }
@@ -4804,7 +4806,7 @@ export default function PdfAnnotateTool() {
                     className="ann-canvas absolute top-0 left-0"
                     width={dims?.width ?? 0}
                     height={dims?.height ?? 0}
-                    style={{ mixBlendMode: 'multiply', cursor: canvasCursor || ((activeTool === 'select' || activeTool === 'text' || activeTool === 'callout') && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
+                    style={{ mixBlendMode: 'multiply', cursor: canvasCursor || (activeTool === 'select' && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
                     onPointerDown={e => handlePointerDown(e, pageNum)}
                     onPointerMove={e => handlePointerMove(e, pageNum)}
                     onPointerUp={handlePointerUp}
