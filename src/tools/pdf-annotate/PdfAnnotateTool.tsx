@@ -65,12 +65,13 @@ interface CalibrationState {
 
 // ── Constants ──────────────────────────────────────────
 
-const RENDER_SCALE = 1.5
+const RENDER_SCALE = typeof window !== 'undefined' ? (window.devicePixelRatio || 1.5) : 1.5
 const MAX_HISTORY = 50
 const HANDLE_SIZE = 6
 const DEFAULT_TEXTBOX_W = 200
 const DEFAULT_TEXTBOX_H = 50
 const ANN_COLORS = ['#000000', '#FF0000', '#FF6600', '#F47B20', '#FFFF00', '#22C55E', '#3B82F6', '#8B5CF6', '#FFFFFF']
+const HIGHLIGHT_COLORS = ['#FFFF00', '#22C55E', '#3B82F6', '#FF69B4', '#FF6600']
 const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] as const
 
 type ToolDef = { type: ToolType; icon: React.ComponentType<{ size?: number }>; label: string }
@@ -1419,6 +1420,7 @@ export default function PdfAnnotateTool() {
   const [eraserMode, setEraserMode] = useState<'partial' | 'object'>('partial')
   const [eraserCursorPos, setEraserCursorPos] = useState<Point | null>(null)
   const eraserModsRef = useRef<{ removed: Set<string>; added: Annotation[] }>({ removed: new Set(), added: [] })
+  const canvasSnapshotRef = useRef<ImageData | null>(null)
 
   // Rotation
   const [pageRotations, setPageRotations] = useState<Record<number, number>>({})
@@ -1550,9 +1552,10 @@ export default function PdfAnnotateTool() {
   const findTextAnnotationAt = useCallback((pt: Point, pageNum?: number): Annotation | undefined => {
     const page = pageNum ?? activePageRef.current
     const pageAnns = annotations[page] || []
+    const th = 4 / zoomRef.current
     for (let i = pageAnns.length - 1; i >= 0; i--) {
       const ann = pageAnns[i]
-      if (ann.type === 'text' && hitTest(pt, ann, 4)) return ann
+      if (ann.type === 'text' && hitTest(pt, ann, th)) return ann
     }
     return undefined
   }, [annotations])
@@ -1560,9 +1563,10 @@ export default function PdfAnnotateTool() {
   const findCalloutAt = useCallback((pt: Point, pageNum?: number): Annotation | undefined => {
     const page = pageNum ?? activePageRef.current
     const pageAnns = annotations[page] || []
+    const th = 4 / zoomRef.current
     for (let i = pageAnns.length - 1; i >= 0; i--) {
       const ann = pageAnns[i]
-      if (ann.type === 'callout' && hitTest(pt, ann, 4)) return ann
+      if (ann.type === 'callout' && hitTest(pt, ann, th)) return ann
     }
     return undefined
   }, [annotations])
@@ -1570,8 +1574,9 @@ export default function PdfAnnotateTool() {
   const findAnnotationAt = useCallback((pt: Point, pageNum?: number): Annotation | undefined => {
     const page = pageNum ?? activePageRef.current
     const pageAnns = annotations[page] || []
+    const th = 4 / zoomRef.current
     for (let i = pageAnns.length - 1; i >= 0; i--) {
-      if (hitTest(pt, pageAnns[i], 4)) return pageAnns[i]
+      if (hitTest(pt, pageAnns[i], th)) return pageAnns[i]
     }
     return undefined
   }, [annotations])
@@ -2305,8 +2310,13 @@ export default function PdfAnnotateTool() {
 
   // ── Re-render annotations ────────────────────────────
 
+  // Full redraw when annotations or measurements change (affects any page)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { redrawAll() }, [annotations, selectedAnnId, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId])
+  useEffect(() => { redrawAll() }, [annotations, measurements, calibration])
+
+  // Scoped redraw for selection/hover changes (only affects active page)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { redrawPage(activePageRef.current) }, [selectedAnnId, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId])
 
   // ── Zoom at viewport center ─────────────────────────
 
@@ -2925,7 +2935,7 @@ export default function PdfAnnotateTool() {
             return
           }
           // Click inside selected text/callout body → switch to tool and edit
-          if (hitTest(pt, ann, 4)) {
+          if (hitTest(pt, ann, 4 / zoom)) {
             setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
             enterEditMode(ann.id)
             return
@@ -3089,7 +3099,7 @@ export default function PdfAnnotateTool() {
       // If currently editing, check if click is inside the active textbox — let textarea handle it
       if (editingTextId) {
         const editAnn = getAnnotation(editingTextId)
-        if (editAnn && hitTest(pt, editAnn, 4)) {
+        if (editAnn && hitTest(pt, editAnn, 4 / zoom)) {
           // Click inside current editing textbox — do nothing, textarea handles cursor
           return
         }
@@ -3170,6 +3180,15 @@ export default function PdfAnnotateTool() {
     }
 
     isDrawingRef.current = true
+
+    // Snapshot canvas for incremental freehand rendering
+    if (activeTool === 'pencil' || activeTool === 'highlighter') {
+      const annCanvas = pageRefsMap.current.get(pageNum)?.annCanvas
+      if (annCanvas) {
+        const ctx = annCanvas.getContext('2d')
+        if (ctx) canvasSnapshotRef.current = ctx.getImageData(0, 0, annCanvas.width, annCanvas.height)
+      }
+    }
 
     if (activeTool === 'eraser') {
       eraserModsRef.current = { removed: new Set(), added: [] }
@@ -3260,14 +3279,14 @@ export default function PdfAnnotateTool() {
           const handleThreshold = HANDLE_SIZE / zoom + 4
           const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
           if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
-          if (hitTest(hoverPt, selAnn, 4)) { setCanvasCursor('move'); return }
+          if (hitTest(hoverPt, selAnn, 4 / zoom)) { setCanvasCursor('move'); return }
         }
       }
       // Check if hovering over any text/callout annotation
       const targetType = activeTool === 'text' ? 'text' : 'callout'
       const pageAnns = annotations[ap] || []
       for (let i = pageAnns.length - 1; i >= 0; i--) {
-        if (pageAnns[i].type === targetType && hitTest(hoverPt, pageAnns[i], 4)) { setCanvasCursor('move'); return }
+        if (pageAnns[i].type === targetType && hitTest(hoverPt, pageAnns[i], 4 / zoom)) { setCanvasCursor('move'); return }
       }
       setCanvasCursor(null)
     }
@@ -3282,7 +3301,7 @@ export default function PdfAnnotateTool() {
           const handleThreshold = HANDLE_SIZE / zoom + 4
           const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
           if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
-          if (hitTest(hoverPt, selAnn, 4)) {
+          if (hitTest(hoverPt, selAnn, 4 / zoom)) {
             setCanvasCursor((selAnn.type === 'text' || selAnn.type === 'callout') ? 'text' : 'move')
             return
           }
@@ -3564,6 +3583,26 @@ export default function PdfAnnotateTool() {
         currentPtsRef.current = [currentPtsRef.current[0], pt]
       } else {
         currentPtsRef.current.push(pt)
+        // Incremental rendering: restore snapshot + draw only current stroke
+        if (!straightLineMode && canvasSnapshotRef.current) {
+          const annCanvas = pageRefsMap.current.get(ap)?.annCanvas
+          if (annCanvas) {
+            const ctx = annCanvas.getContext('2d')
+            if (ctx) {
+              ctx.putImageData(canvasSnapshotRef.current, 0, 0)
+              ctx.save()
+              ctx.globalAlpha = opacity / 100
+              ctx.strokeStyle = color
+              ctx.lineWidth = strokeWidth * RENDER_SCALE
+              ctx.lineCap = 'round'
+              ctx.lineJoin = 'round'
+              if (activeTool === 'highlighter') ctx.globalCompositeOperation = 'multiply'
+              drawSmoothPath(ctx, currentPtsRef.current, RENDER_SCALE)
+              ctx.restore()
+              return
+            }
+          }
+        }
       }
     } else {
       const start = currentPtsRef.current[0]
@@ -3596,6 +3635,7 @@ export default function PdfAnnotateTool() {
   const handlePointerUp = useCallback(() => {
     if (!isDrawingRef.current) return
     isDrawingRef.current = false
+    canvasSnapshotRef.current = null
     const ap = activePageRef.current
 
     // General drag (select tool: moving shapes)
@@ -4497,7 +4537,7 @@ export default function PdfAnnotateTool() {
               setColor(c)
               if (selectedAnnId) updateAnnotation(selectedAnnId, { color: c })
             }}
-            presets={ANN_COLORS}
+            presets={(activeTool === 'highlighter' || activeTool === 'textHighlight') ? HIGHLIGHT_COLORS : ANN_COLORS}
           />
         )}
 
