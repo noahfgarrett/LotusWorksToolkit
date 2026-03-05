@@ -2684,7 +2684,28 @@ export default function PdfAnnotateTool() {
                     })
                   }
                 }
+              } else if (ann.points.length >= 3 && ann.smooth !== false) {
+                // Export as SVG cubic Bézier (Catmull-Rom) for smooth curves
+                const pts = ann.points
+                const first = toPC(pts[0])
+                const tension = 0.3
+                let svgD = `M 0 0`
+                for (let i = 0; i < pts.length - 1; i++) {
+                  const p0 = pts[Math.max(0, i - 1)]
+                  const p1 = pts[i]
+                  const p2 = pts[i + 1]
+                  const p3 = pts[Math.min(pts.length - 1, i + 2)]
+                  const cp1 = toPC({ x: p1.x + (p2.x - p0.x) * tension, y: p1.y + (p2.y - p0.y) * tension })
+                  const cp2 = toPC({ x: p2.x - (p3.x - p1.x) * tension, y: p2.y - (p3.y - p1.y) * tension })
+                  const ep = toPC(p2)
+                  svgD += ` C ${cp1.x - first.x} ${-(cp1.y - first.y)} ${cp2.x - first.x} ${-(cp2.y - first.y)} ${ep.x - first.x} ${-(ep.y - first.y)}`
+                }
+                page.drawSvgPath(svgD, {
+                  x: first.x, y: first.y,
+                  borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
+                })
               } else {
+                // Straight segments (eraser fragments or < 3 points)
                 for (let i = 0; i < ann.points.length - 1; i++) {
                   const s = toPC(ann.points[i])
                   const e = toPC(ann.points[i + 1])
@@ -2784,31 +2805,41 @@ export default function PdfAnnotateTool() {
                 svgD += ' Z'
                 page.drawSvgPath(svgD, { x: first.x, y: first.y, color: rgb(fr, fg, fb), opacity: ann.opacity, borderWidth: 0 })
               }
-              // Bumpy outline
-              const cloudDash = ann.dashPattern === 'dashed' ? [ann.strokeWidth * 3, ann.strokeWidth * 2]
-                : ann.dashPattern === 'dotted' ? [ann.strokeWidth, ann.strokeWidth * 2] : undefined
-              for (let ei = 0; ei < ann.points.length; ei++) {
-                const start = ann.points[ei]
-                const end = ann.points[(ei + 1) % ann.points.length]
-                const edgeLen = Math.hypot(end.x - start.x, end.y - start.y)
-                const arcSz = 20
-                const numBumps = Math.max(2, Math.round(edgeLen / arcSz))
-                const ddx = (end.x - start.x) / numBumps
-                const ddy = (end.y - start.y) / numBumps
-                const len = Math.hypot(ddx, ddy)
-                if (len === 0) continue
-                const nx = (ddy / len) * arcSz * 0.4
-                const ny = (-ddx / len) * arcSz * 0.4
-                for (let i = 0; i < numBumps; i++) {
-                  const sx = start.x + ddx * i, sy = start.y + ddy * i
-                  const ex = start.x + ddx * (i + 1), ey = start.y + ddy * (i + 1)
-                  const mx = (sx + ex) / 2 + nx, my = (sy + ey) / 2 + ny
-                  const lineOpts1: Record<string, unknown> = { start: toPC({ x: sx, y: sy }), end: toPC({ x: mx, y: my }), thickness: ann.strokeWidth, color: c, opacity: ann.opacity }
-                  const lineOpts2: Record<string, unknown> = { start: toPC({ x: mx, y: my }), end: toPC({ x: ex, y: ey }), thickness: ann.strokeWidth, color: c, opacity: ann.opacity }
-                  if (cloudDash) { lineOpts1.dashArray = cloudDash; lineOpts2.dashArray = cloudDash }
-                  page.drawLine(lineOpts1 as unknown as Parameters<typeof page.drawLine>[0])
-                  page.drawLine(lineOpts2 as unknown as Parameters<typeof page.drawLine>[0])
+              // Bumpy outline as SVG quadratic Bézier curves
+              {
+                const firstPt = toPC(ann.points[0])
+                let svgPath = `M ${0} ${0}`
+                for (let ei = 0; ei < ann.points.length; ei++) {
+                  const edgeStart = ann.points[ei]
+                  const edgeEnd = ann.points[(ei + 1) % ann.points.length]
+                  const edgeLen = Math.hypot(edgeEnd.x - edgeStart.x, edgeEnd.y - edgeStart.y)
+                  const arcSz = 20
+                  const numBumps = Math.max(2, Math.round(edgeLen / arcSz))
+                  const ddx = (edgeEnd.x - edgeStart.x) / numBumps
+                  const ddy = (edgeEnd.y - edgeStart.y) / numBumps
+                  const len = Math.hypot(ddx, ddy)
+                  if (len === 0) continue
+                  const nx = (ddy / len) * arcSz * 0.4
+                  const ny = (-ddx / len) * arcSz * 0.4
+                  for (let i = 0; i < numBumps; i++) {
+                    const ex = edgeStart.x + ddx * (i + 1), ey = edgeStart.y + ddy * (i + 1)
+                    const sx = edgeStart.x + ddx * i, sy = edgeStart.y + ddy * i
+                    const mx = (sx + ex) / 2 + nx, my = (sy + ey) / 2 + ny
+                    const cp = toPC({ x: mx, y: my })
+                    const ep = toPC({ x: ex, y: ey })
+                    // SVG Y is inverted vs PDF Y — negate offsets
+                    svgPath += ` Q ${cp.x - firstPt.x} ${-(cp.y - firstPt.y)} ${ep.x - firstPt.x} ${-(ep.y - firstPt.y)}`
+                  }
                 }
+                svgPath += ' Z'
+                const cloudDash = ann.dashPattern === 'dashed' ? [ann.strokeWidth * 3, ann.strokeWidth * 2]
+                  : ann.dashPattern === 'dotted' ? [ann.strokeWidth, ann.strokeWidth * 2] : undefined
+                const pathOpts: Record<string, unknown> = {
+                  x: firstPt.x, y: firstPt.y,
+                  borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
+                }
+                if (cloudDash) pathOpts.borderDashArray = cloudDash
+                page.drawSvgPath(svgPath, pathOpts as Parameters<typeof page.drawSvgPath>[1])
               }
               break
             }
