@@ -261,6 +261,8 @@ export default function PdfAnnotateTool() {
   const eraserCursorDivRef = useRef<HTMLDivElement>(null)
   const tooltipDivRef = useRef<HTMLDivElement>(null)
   const cropDrawRef = useRef<{ startPt: Point } | null>(null)
+  // Per-page render scale tracking for zoom-aware rendering
+  const pageRenderScaleRef = useRef<Map<number, number>>(new Map())
   const findInputRef = useRef<HTMLInputElement>(null)
   const isDrawingRef = useRef(false)
   const currentPtsRef = useRef<Point[]>([])
@@ -305,11 +307,12 @@ export default function PdfAnnotateTool() {
     const canvas = refs.annCanvas
     const dims = pageDimsMap.current.get(pageNum) || { width: 0, height: 0 }
     const rect = canvas.getBoundingClientRect()
+    const rs = pageRenderScaleRef.current.get(pageNum) ?? RENDER_SCALE
     return {
       x: Math.max(0, Math.min(dims.width,
-        ((e.clientX - rect.left) / rect.width) * canvas.width / RENDER_SCALE)),
+        ((e.clientX - rect.left) / rect.width) * canvas.width / rs)),
       y: Math.max(0, Math.min(dims.height,
-        ((e.clientY - rect.top) / rect.height) * canvas.height / RENDER_SCALE)),
+        ((e.clientY - rect.top) / rect.height) * canvas.height / rs)),
     }
   }, [])
 
@@ -374,6 +377,7 @@ export default function PdfAnnotateTool() {
     const canvas = refs.annCanvas
     if (!canvas || canvas.width === 0) return
     const ctx = canvas.getContext('2d')!
+    const rs = pageRenderScaleRef.current.get(pageNum) ?? RENDER_SCALE
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const isActive = pageNum === activePageRef.current
@@ -381,9 +385,9 @@ export default function PdfAnnotateTool() {
     const pageAnns = (annotations[pageNum] || [])
       .filter(a => !isActive || !mods.removed.has(a.id))
     for (const ann of pageAnns) {
-      drawAnnotation(ctx, ann, RENDER_SCALE)
+      drawAnnotation(ctx, ann, rs)
       if (ann.id === selectedAnnId) {
-        drawSelectionUI(ctx, ann, RENDER_SCALE)
+        drawSelectionUI(ctx, ann, rs)
         if (ann.type === 'callout' && selectedArrowIdx !== null && ann.arrows && selectedArrowIdx < ann.arrows.length) {
           const tip = ann.arrows[selectedArrowIdx]
           const origin = nearestPointOnRect(ann.points[0].x, ann.points[0].y, ann.width!, ann.height!, tip.x, tip.y)
@@ -392,13 +396,13 @@ export default function PdfAnnotateTool() {
           ctx.lineWidth = 2
           ctx.setLineDash([5, 3])
           ctx.beginPath()
-          ctx.moveTo(origin.x * RENDER_SCALE, origin.y * RENDER_SCALE)
-          ctx.lineTo(tip.x * RENDER_SCALE, tip.y * RENDER_SCALE)
+          ctx.moveTo(origin.x * rs, origin.y * rs)
+          ctx.lineTo(tip.x * rs, tip.y * rs)
           ctx.stroke()
           ctx.setLineDash([])
           ctx.fillStyle = '#EF4444'
           ctx.beginPath()
-          ctx.arc(tip.x * RENDER_SCALE, tip.y * RENDER_SCALE, 5, 0, Math.PI * 2)
+          ctx.arc(tip.x * rs, tip.y * rs, 5, 0, Math.PI * 2)
           ctx.fill()
           ctx.restore()
         }
@@ -407,7 +411,7 @@ export default function PdfAnnotateTool() {
 
     // Eraser-added fragments (only on active page)
     if (isActive) {
-      for (const frag of mods.added) drawAnnotation(ctx, frag, RENDER_SCALE)
+      for (const frag of mods.added) drawAnnotation(ctx, frag, rs)
     }
 
     // Hover highlight
@@ -421,7 +425,7 @@ export default function PdfAnnotateTool() {
           ctx.lineWidth = 1
           ctx.globalAlpha = 0.4
           ctx.setLineDash([3, 3])
-          ctx.strokeRect(bounds.x * RENDER_SCALE, bounds.y * RENDER_SCALE, bounds.w * RENDER_SCALE, bounds.h * RENDER_SCALE)
+          ctx.strokeRect(bounds.x * rs, bounds.y * rs, bounds.w * rs, bounds.h * rs)
           ctx.setLineDash([])
           ctx.restore()
         }
@@ -437,7 +441,7 @@ export default function PdfAnnotateTool() {
         const item = fm.item
         ctx.globalAlpha = fi === findIdx ? 0.7 : 0.35
         ctx.fillStyle = fi === findIdx ? '#f97316' : '#facc15'
-        ctx.fillRect(item.x * RENDER_SCALE, item.y * RENDER_SCALE, item.width * RENDER_SCALE, item.height * RENDER_SCALE)
+        ctx.fillRect(item.x * rs, item.y * rs, item.width * rs, item.height * rs)
       }
       ctx.restore()
     }
@@ -451,15 +455,15 @@ export default function PdfAnnotateTool() {
         ctx.globalAlpha = 0.45
         ctx.fillStyle = '#000000'
         // Outside crop: 4 rects
-        ctx.fillRect(0, 0, dims.width * RENDER_SCALE, cropRgn.y * RENDER_SCALE)
-        ctx.fillRect(0, (cropRgn.y + cropRgn.h) * RENDER_SCALE, dims.width * RENDER_SCALE, (dims.height - cropRgn.y - cropRgn.h) * RENDER_SCALE)
-        ctx.fillRect(0, cropRgn.y * RENDER_SCALE, cropRgn.x * RENDER_SCALE, cropRgn.h * RENDER_SCALE)
-        ctx.fillRect((cropRgn.x + cropRgn.w) * RENDER_SCALE, cropRgn.y * RENDER_SCALE, (dims.width - cropRgn.x - cropRgn.w) * RENDER_SCALE, cropRgn.h * RENDER_SCALE)
+        ctx.fillRect(0, 0, dims.width * rs, cropRgn.y * rs)
+        ctx.fillRect(0, (cropRgn.y + cropRgn.h) * rs, dims.width * rs, (dims.height - cropRgn.y - cropRgn.h) * rs)
+        ctx.fillRect(0, cropRgn.y * rs, cropRgn.x * rs, cropRgn.h * rs)
+        ctx.fillRect((cropRgn.x + cropRgn.w) * rs, cropRgn.y * rs, (dims.width - cropRgn.x - cropRgn.w) * rs, cropRgn.h * rs)
         ctx.globalAlpha = 1
         ctx.strokeStyle = '#f97316'
         ctx.lineWidth = 2
         ctx.setLineDash([6, 3])
-        ctx.strokeRect(cropRgn.x * RENDER_SCALE, cropRgn.y * RENDER_SCALE, cropRgn.w * RENDER_SCALE, cropRgn.h * RENDER_SCALE)
+        ctx.strokeRect(cropRgn.x * rs, cropRgn.y * rs, cropRgn.w * rs, cropRgn.h * rs)
         ctx.setLineDash([])
         ctx.restore()
       }
@@ -477,7 +481,7 @@ export default function PdfAnnotateTool() {
       ctx.lineWidth = 2
       ctx.setLineDash([6, 3])
       ctx.globalAlpha = 0.8
-      ctx.strokeRect(cx * RENDER_SCALE, cy * RENDER_SCALE, cw * RENDER_SCALE, ch * RENDER_SCALE)
+      ctx.strokeRect(cx * rs, cy * rs, cw * rs, ch * rs)
       ctx.setLineDash([])
       ctx.restore()
     }
@@ -498,7 +502,7 @@ export default function PdfAnnotateTool() {
             ...(dashPattern !== 'solid' ? { dashPattern } : {}),
             ...(arrowStart && activeTool === 'arrow' ? { arrowStart: true } : {}),
           }
-          drawAnnotation(ctx, inProgress, RENDER_SCALE)
+          drawAnnotation(ctx, inProgress, rs)
         }
       }
 
@@ -509,7 +513,7 @@ export default function PdfAnnotateTool() {
         ctx.globalCompositeOperation = 'multiply'
         ctx.fillStyle = color
         for (const r of textHighlightPreviewRectsRef.current) {
-          ctx.fillRect(r.x * RENDER_SCALE, r.y * RENDER_SCALE, r.w * RENDER_SCALE, r.h * RENDER_SCALE)
+          ctx.fillRect(r.x * rs, r.y * rs, r.w * rs, r.h * rs)
         }
         ctx.restore()
       }
@@ -519,12 +523,12 @@ export default function PdfAnnotateTool() {
         ctx.save()
         ctx.globalAlpha = 1
         ctx.strokeStyle = color
-        ctx.lineWidth = Math.max(1, 2 * RENDER_SCALE)
+        ctx.lineWidth = Math.max(1, 2 * rs)
         ctx.beginPath()
         for (const r of textHighlightPreviewRectsRef.current) {
-          const midY = (r.y + r.h / 2) * RENDER_SCALE
-          ctx.moveTo(r.x * RENDER_SCALE, midY)
-          ctx.lineTo((r.x + r.w) * RENDER_SCALE, midY)
+          const midY = (r.y + r.h / 2) * rs
+          ctx.moveTo(r.x * rs, midY)
+          ctx.lineTo((r.x + r.w) * rs, midY)
         }
         ctx.stroke()
         ctx.restore()
@@ -540,7 +544,7 @@ export default function PdfAnnotateTool() {
           ctx.globalAlpha = 0.3
           ctx.fillStyle = '#3B82F6'
           for (const r of selectRects) {
-            ctx.fillRect(r.x * RENDER_SCALE, r.y * RENDER_SCALE, r.w * RENDER_SCALE, r.h * RENDER_SCALE)
+            ctx.fillRect(r.x * rs, r.y * rs, r.w * rs, r.h * rs)
           }
           ctx.restore()
         }
@@ -550,7 +554,7 @@ export default function PdfAnnotateTool() {
       if (activeTool === 'cloud' && currentPtsRef.current.length > 0) {
         const cpts = currentPtsRef.current
         const preview = cloudPreviewRef.current
-        const scale = RENDER_SCALE
+        const scale = rs
         const arcSize = 20 * scale
 
         ctx.save()
@@ -616,10 +620,10 @@ export default function PdfAnnotateTool() {
           ctx.strokeStyle = '#3B82F6'
           ctx.lineWidth = 1.5
           ctx.setLineDash([4, 3])
-          const x = Math.min(pts[0].x, pts[1].x) * RENDER_SCALE
-          const y = Math.min(pts[0].y, pts[1].y) * RENDER_SCALE
-          const w = Math.abs(pts[1].x - pts[0].x) * RENDER_SCALE
-          const h = Math.abs(pts[1].y - pts[0].y) * RENDER_SCALE
+          const x = Math.min(pts[0].x, pts[1].x) * rs
+          const y = Math.min(pts[0].y, pts[1].y) * rs
+          const w = Math.abs(pts[1].x - pts[0].x) * rs
+          const h = Math.abs(pts[1].y - pts[0].y) * rs
           ctx.strokeRect(x, y, w, h)
           ctx.setLineDash([])
           ctx.restore()
@@ -634,10 +638,10 @@ export default function PdfAnnotateTool() {
           ctx.strokeStyle = '#3B82F6'
           ctx.lineWidth = 1.5
           ctx.setLineDash([4, 3])
-          const x = Math.min(pts[0].x, pts[1].x) * RENDER_SCALE
-          const y = Math.min(pts[0].y, pts[1].y) * RENDER_SCALE
-          const w = Math.abs(pts[1].x - pts[0].x) * RENDER_SCALE
-          const h = Math.abs(pts[1].y - pts[0].y) * RENDER_SCALE
+          const x = Math.min(pts[0].x, pts[1].x) * rs
+          const y = Math.min(pts[0].y, pts[1].y) * rs
+          const w = Math.abs(pts[1].x - pts[0].x) * rs
+          const h = Math.abs(pts[1].y - pts[0].y) * rs
           ctx.strokeRect(x, y, w, h)
           ctx.setLineDash([])
           ctx.restore()
@@ -652,11 +656,11 @@ export default function PdfAnnotateTool() {
           const origin = nearestPointOnRect(ann.points[0].x, ann.points[0].y, ann.width, ann.height, tip.x, tip.y)
           ctx.save()
           ctx.strokeStyle = '#000000'
-          ctx.lineWidth = 1.5 * RENDER_SCALE
+          ctx.lineWidth = 1.5 * rs
           ctx.setLineDash([4, 3])
           ctx.beginPath()
-          ctx.moveTo(origin.x * RENDER_SCALE, origin.y * RENDER_SCALE)
-          ctx.lineTo(tip.x * RENDER_SCALE, tip.y * RENDER_SCALE)
+          ctx.moveTo(origin.x * rs, origin.y * rs)
+          ctx.lineTo(tip.x * rs, tip.y * rs)
           ctx.stroke()
           ctx.setLineDash([])
           ctx.restore()
@@ -671,14 +675,14 @@ export default function PdfAnnotateTool() {
           endPt: measurePreviewRef.current,
           page: pageNum,
         }
-        drawMeasurement(ctx, preview, RENDER_SCALE, calibration, false)
+        drawMeasurement(ctx, preview, rs, calibration, false)
       }
     }
 
     // Committed measurements for this page
     const pageMeasurements = measurements[pageNum] || []
     for (const m of pageMeasurements) {
-      drawMeasurement(ctx, m, RENDER_SCALE, calibration, m.id === selectedMeasureId)
+      drawMeasurement(ctx, m, rs, calibration, m.id === selectedMeasureId)
     }
   }, [annotations, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId, getAnnotation, findMatches, findIdx, cropRegions])
 
@@ -909,6 +913,7 @@ export default function PdfAnnotateTool() {
     loadingThumbs.current.delete(page)
     // Mark page as not rendered so it gets re-rendered with new rotation
     renderedPagesRef.current.delete(page)
+    pageRenderScaleRef.current.delete(page)
     // Re-fetch dimensions — the dimsReady change will trigger the observer to re-render
     if (pdfFile) {
       getAllPageDimensions(pdfFile, RENDER_SCALE, { ...pageRotations, [page]: newRot }).then(allDims => {
@@ -963,6 +968,7 @@ export default function PdfAnnotateTool() {
       // Clear multi-page refs
       pageRefsMap.current.clear()
       renderedPagesRef.current.clear()
+      pageRenderScaleRef.current.clear()
       activePageRef.current = 1
       // Compute page dimensions for all pages
       const dims = await getAllPageDimensions(pdf, RENDER_SCALE)
@@ -1096,9 +1102,25 @@ export default function PdfAnnotateTool() {
     renderedPagesRef.current.add(pageNum)
     try {
       const rotation = pageRotationsRef.current[pageNum] || 0
-      await renderPageToCanvas(pdfFile, pageNum, refs.pdfCanvas, RENDER_SCALE, rotation)
+      // Render at zoom-aware scale so the pixel buffer is always DPR-matched at the current zoom
+      const clampedZoom = Math.min(Math.max(zoomRef.current, 0.25), 3)
+      const rs = RENDER_SCALE * clampedZoom
+      await renderPageToCanvas(pdfFile, pageNum, refs.pdfCanvas, rs, rotation)
+      // Keep the CSS display size at the base (RENDER_SCALE) dimensions so the
+      // parent container layout is unchanged; zoom is applied via CSS transform above.
+      const dims = pageDimsMap.current.get(pageNum)
+      if (dims) {
+        refs.pdfCanvas.style.width = dims.width + 'px'
+        refs.pdfCanvas.style.height = dims.height + 'px'
+      }
+      // Sync annotation canvas to same pixel buffer dimensions
       refs.annCanvas.width = refs.pdfCanvas.width
       refs.annCanvas.height = refs.pdfCanvas.height
+      if (dims) {
+        refs.annCanvas.style.width = dims.width + 'px'
+        refs.annCanvas.style.height = dims.height + 'px'
+      }
+      pageRenderScaleRef.current.set(pageNum, rs)
       redrawPage(pageNum)
     } catch {
       renderedPagesRef.current.delete(pageNum)
@@ -1156,6 +1178,29 @@ export default function PdfAnnotateTool() {
     return () => obs.disconnect()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfFile, dimsReady, renderSinglePage, fitToWindow])
+
+  // Re-render all visible pages when zoom changes (for pixel-perfect sharpness at every zoom level)
+  useEffect(() => {
+    if (!pdfFile) return
+    const timer = setTimeout(() => {
+      const clampedZoom = Math.min(Math.max(zoomRef.current, 0.25), 3)
+      const rs = RENDER_SCALE * clampedZoom
+      // Only re-render pages whose stored scale differs enough from the new target
+      const pagesToRerender: number[] = []
+      for (const pageNum of renderedPagesRef.current) {
+        const currentRs = pageRenderScaleRef.current.get(pageNum)
+        if (!currentRs || Math.abs(currentRs - rs) / rs > 0.05) {
+          pagesToRerender.push(pageNum)
+        }
+      }
+      for (const pageNum of pagesToRerender) {
+        renderedPagesRef.current.delete(pageNum)
+        pageRenderScaleRef.current.delete(pageNum)
+        renderSinglePage(pageNum)
+      }
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [zoom, pdfFile, renderSinglePage])
 
   // Scroll-based currentPage tracking
   useEffect(() => {
@@ -2646,11 +2691,12 @@ export default function PdfAnnotateTool() {
               ctx.save()
               ctx.globalAlpha = opacity / 100
               ctx.strokeStyle = color
-              ctx.lineWidth = strokeWidth * RENDER_SCALE
+              const pageRs = pageRenderScaleRef.current.get(ap) ?? RENDER_SCALE
+              ctx.lineWidth = strokeWidth * pageRs
               ctx.lineCap = 'round'
               ctx.lineJoin = 'round'
               if (activeTool === 'highlighter') ctx.globalCompositeOperation = 'multiply'
-              drawSmoothPath(ctx, currentPtsRef.current, RENDER_SCALE)
+              drawSmoothPath(ctx, currentPtsRef.current, pageRs)
               ctx.restore()
               return
             }
