@@ -6,13 +6,13 @@ import {
 
 // ── Core Types ──────────────────────────────────────────
 
-export type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight' | 'textStrikethrough'
+export type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'stamp' | 'crop'
 
 export interface Point { x: number; y: number }
 
 export interface Annotation {
   id: string
-  type: Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough'>
+  type: Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'crop'>
   points: Point[]
   color: string
   strokeWidth: number
@@ -39,6 +39,7 @@ export interface Annotation {
   superscript?: boolean
   subscript?: boolean
   listType?: 'none' | 'bullet' | 'numbered'
+  stampType?: string
 }
 
 export type PageAnnotations = Record<number, Annotation[]>
@@ -128,11 +129,21 @@ export const PDF_FONT_VARIANTS: Record<string, Record<FontVariantKey, StandardFo
   },
 }
 
+export const STAMP_PRESETS = [
+  { label: 'APPROVED', color: '#16a34a', bg: '#f0fdf4' },
+  { label: 'DRAFT', color: '#2563eb', bg: '#eff6ff' },
+  { label: 'CONFIDENTIAL', color: '#dc2626', bg: '#fef2f2' },
+  { label: 'REVIEWED', color: '#7c3aed', bg: '#f5f3ff' },
+  { label: 'VOID', color: '#ea580c', bg: '#fff7ed' },
+  { label: 'FOR REVIEW', color: '#ca8a04', bg: '#fefce8' },
+]
+
 export const CURSOR_MAP: Record<ToolType, string> = {
   select: 'default', pencil: 'crosshair', highlighter: 'crosshair', line: 'crosshair',
   arrow: 'crosshair', rectangle: 'crosshair', circle: 'crosshair',
   cloud: 'crosshair', text: 'text', eraser: 'none',
   callout: 'crosshair', measure: 'crosshair', textHighlight: 'text', textStrikethrough: 'text',
+  stamp: 'crosshair', crop: 'crosshair',
 }
 
 export const HANDLE_CURSOR_MAP: Record<string, string> = {
