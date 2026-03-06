@@ -493,15 +493,16 @@ export default function PdfMergeTool() {
 
       if ('showSaveFilePicker' in window) {
         try {
-          const handle = await (window as any).showSaveFilePicker({
+          type PickerFn = (opts: unknown) => Promise<{ createWritable: () => Promise<{ write: (b: Blob) => Promise<void>; close: () => Promise<void> }> }>
+          const handle = await (window as unknown as { showSaveFilePicker: PickerFn }).showSaveFilePicker({
             suggestedName: 'merged.pdf',
             types: [{ description: 'PDF Document', accept: { 'application/pdf': ['.pdf'] } }],
           })
           const writable = await handle.createWritable()
           await writable.write(blob)
           await writable.close()
-        } catch (e: any) {
-          if (e?.name === 'AbortError') return   // user cancelled
+        } catch (e: unknown) {
+          if (e instanceof Error && e.name === 'AbortError') return   // user cancelled
           throw e
         }
       } else {

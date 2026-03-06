@@ -16,25 +16,29 @@ interface FormIndexEntry {
 // ── CRUD ─────────────────────────────────────────────────────
 
 export function saveForm(doc: FormDocument): void {
-  const json = JSON.stringify(doc)
-  localStorage.setItem(KEY_PREFIX + doc.id, json)
+  try {
+    const json = JSON.stringify(doc)
+    localStorage.setItem(KEY_PREFIX + doc.id, json)
 
-  // Update index
-  const index = listFormIndex()
-  const existing = index.findIndex(e => e.id === doc.id)
-  const entry: FormIndexEntry = {
-    id: doc.id,
-    title: doc.title,
-    pageCount: doc.pageCount,
-    elementCount: doc.elements.length,
-    updatedAt: doc.updatedAt,
+    // Update index
+    const index = listFormIndex()
+    const existing = index.findIndex(e => e.id === doc.id)
+    const entry: FormIndexEntry = {
+      id: doc.id,
+      title: doc.title,
+      pageCount: doc.pageCount,
+      elementCount: doc.elements.length,
+      updatedAt: doc.updatedAt,
+    }
+    if (existing >= 0) {
+      index[existing] = entry
+    } else {
+      index.push(entry)
+    }
+    localStorage.setItem(INDEX_KEY, JSON.stringify(index))
+  } catch {
+    // quota exceeded or private browsing — silently fail
   }
-  if (existing >= 0) {
-    index[existing] = entry
-  } else {
-    index.push(entry)
-  }
-  localStorage.setItem(INDEX_KEY, JSON.stringify(index))
 }
 
 export function loadForm(id: string): FormDocument | null {
@@ -48,9 +52,13 @@ export function loadForm(id: string): FormDocument | null {
 }
 
 export function deleteForm(id: string): void {
-  localStorage.removeItem(KEY_PREFIX + id)
-  const index = listFormIndex().filter(e => e.id !== id)
-  localStorage.setItem(INDEX_KEY, JSON.stringify(index))
+  try {
+    localStorage.removeItem(KEY_PREFIX + id)
+    const index = listFormIndex().filter(e => e.id !== id)
+    localStorage.setItem(INDEX_KEY, JSON.stringify(index))
+  } catch {
+    // quota exceeded or private browsing — silently fail
+  }
 }
 
 export function listFormIndex(): FormIndexEntry[] {
