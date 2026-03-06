@@ -827,11 +827,17 @@ export default function PdfAnnotateTool() {
 
   const fitToWindow = useCallback(() => {
     if (!scrollRef.current || maxCanvasWidthRef.current === 0) return
-    const containerW = scrollRef.current.clientWidth - 48
+    const el = scrollRef.current
+    const containerW = el.clientWidth - 48
+    const containerH = el.clientHeight - 48
+    // Fit to width, but also cap by height so the whole first page fits in view.
+    // On very wide monitors this prevents extreme zoom-in (e.g. 250%) when fitting a
+    // narrow page to the full container width.
     const scaleW = containerW / maxCanvasWidthRef.current
-    const newZoom = Math.round(Math.max(0.25, Math.min(4.0, scaleW)) * 100) / 100
+    const firstDims = pageDimsMap.current.get(1)
+    const scaleH = firstDims && containerH > 0 ? containerH / firstDims.height : scaleW
+    const newZoom = Math.round(Math.max(0.25, Math.min(4.0, Math.min(scaleW, scaleH))) * 100) / 100
     setZoom(newZoom)
-    // Reset scroll to top-left so page is fully visible
     requestAnimationFrame(() => {
       if (scrollRef.current) {
         scrollRef.current.scrollTop = 0
@@ -1174,7 +1180,8 @@ export default function PdfAnnotateTool() {
       }, 150)
     } else if (!initialFitDoneRef.current) {
       initialFitDoneRef.current = true
-      requestAnimationFrame(() => fitToWindow())
+      // Always open at 100% zoom — predictable starting point on any screen size/DPR
+      setZoom(1.0)
     }
 
     return () => obs.disconnect()
