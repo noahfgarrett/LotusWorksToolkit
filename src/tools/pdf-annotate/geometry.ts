@@ -152,6 +152,11 @@ export function hitTest(p: Point, ann: Annotation, threshold: number): boolean {
       const nearY = Math.max(y, Math.min(y + tH, p.y))
       return Math.hypot(p.x - nearX, p.y - nearY) < th
     }
+    case 'stamp': {
+      if (!ann.points.length || !ann.width || !ann.height) return false
+      const { x: sx, y: sy } = ann.points[0]
+      return p.x >= sx - th && p.x <= sx + ann.width + th && p.y >= sy - th && p.y <= sy + ann.height + th
+    }
     case 'callout': {
       if (!ann.points.length || !ann.width || !ann.height) return false
       const { x, y } = ann.points[0]
@@ -323,7 +328,8 @@ export function getAnnotationBounds(ann: Annotation): { x: number; y: number; w:
   if (!pts.length) return null
   switch (ann.type) {
     case 'text':
-    case 'callout': {
+    case 'callout':
+    case 'stamp': {
       if (!ann.width || !ann.height) return null
       return { x: pts[0].x, y: pts[0].y, w: ann.width, h: ann.height }
     }

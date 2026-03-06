@@ -415,6 +415,38 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
       }
       break
     }
+    case 'stamp': {
+      if (!pts.length || !ann.width || !ann.height) break
+      const sx = pts[0].x * scale, sy = pts[0].y * scale
+      const sw = ann.width * scale, sh = ann.height * scale
+      ctx.save()
+      if (ann.backgroundColor) {
+        ctx.fillStyle = ann.backgroundColor
+        ctx.globalAlpha = ann.opacity
+        ctx.fillRect(sx, sy, sw, sh)
+      }
+      ctx.globalAlpha = ann.opacity
+      ctx.strokeStyle = ann.color
+      ctx.lineWidth = 2 * scale
+      ctx.setLineDash([])
+      ctx.strokeRect(sx, sy, sw, sh)
+      // Inner border
+      ctx.strokeRect(sx + 3 * scale, sy + 3 * scale, sw - 6 * scale, sh - 6 * scale)
+      // Text label
+      const stampLabel = ann.stampType || 'STAMP'
+      const targetFs = Math.min(sh * 0.42, 18 * scale)
+      ctx.font = `bold ${targetFs}px Arial, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillStyle = ann.color
+      ctx.save()
+      ctx.translate(sx + sw / 2, sy + sh / 2)
+      ctx.rotate(-0.08)
+      ctx.fillText(stampLabel, 0, 0)
+      ctx.restore()
+      ctx.restore()
+      break
+    }
   }
   ctx.restore()
 }

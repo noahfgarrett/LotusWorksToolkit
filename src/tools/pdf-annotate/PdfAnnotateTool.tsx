@@ -18,13 +18,14 @@ import {
   X, Ruler, TextSelect, MousePointer2, Strikethrough, Paintbrush,
   Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight, AlignJustify,
   Superscript, Subscript, List, ListOrdered,
+  Pin, Search, Crop, Tag,
 } from 'lucide-react'
 
 // ── Extracted modules ─────────────────────────────────
 import type { ToolType, Point, Annotation, PageAnnotations, Measurement, CalibrationState, HandleId, PageRefs } from './types.ts'
 import {
   RENDER_SCALE, MAX_HISTORY, HANDLE_SIZE, DEFAULT_TEXTBOX_W, DEFAULT_TEXTBOX_H,
-  ANN_COLORS, HIGHLIGHT_COLORS, ZOOM_PRESETS,
+  ANN_COLORS, HIGHLIGHT_COLORS, ZOOM_PRESETS, STAMP_PRESETS,
   DRAW_TOOLS, TEXT_TOOLS, DRAW_TYPES, TEXT_TYPES,
   FONT_FAMILIES, PDF_FONT_MAP, CURSOR_MAP, HANDLE_CURSOR_MAP,
   genId, resolvePdfFont, saveWithPicker, toPdfCoords,
@@ -96,6 +97,14 @@ function ThumbnailItem({ pageNum, thumbnail, isCurrent, isSelected, hasAnnotatio
   )
 }
 
+// ── Annotation label helper ────────────────────────────
+
+function annLabel(ann: Annotation): string {
+  if (ann.stampType) return `Stamp: ${ann.stampType}`
+  if (ann.text) return ann.text.slice(0, 30).replace(/\n/g, ' ')
+  return ann.type.charAt(0).toUpperCase() + ann.type.slice(1)
+}
+
 // ── Component ──────────────────────────────────────────
 
 export default function PdfAnnotateTool() {
@@ -135,6 +144,20 @@ export default function PdfAnnotateTool() {
   } | null>(null)
   const clipboardRef = useRef<Annotation | null>(null)
   const [hoveredAnnId, setHoveredAnnId] = useState<string | null>(null)
+
+  // Feature: sticky tool, hover tooltip, context menu, annotation list, find, stamp, crop, page input
+  const [stickyTool, setStickyTool] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; annId: string; pageNum: number } | null>(null)
+  const [annListOpen, setAnnListOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findOpen, setFindOpen] = useState(false)
+  const [findMatches, setFindMatches] = useState<{ pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[]>([])
+  const [findIdx, setFindIdx] = useState(0)
+  const [stampDropdownOpen, setStampDropdownOpen] = useState(false)
+  const [activeStampPreset, setActiveStampPreset] = useState(STAMP_PRESETS[0])
+  const [cropRegions, setCropRegions] = useState<Record<number, { x: number; y: number; w: number; h: number }>>({})
+  const [pageInputActive, setPageInputActive] = useState(false)
+  const copiedStyleRef = useRef<{ color: string; strokeWidth: number; opacity: number; fontFamily?: string; fontSize?: number; bold?: boolean; italic?: boolean } | null>(null)
 
   // Shapes dropdown
   const [shapesDropdownOpen, setShapesDropdownOpen] = useState(false)
@@ -231,6 +254,11 @@ export default function PdfAnnotateTool() {
   const shapesDropdownRef = useRef<HTMLDivElement>(null)
   const textDropdownRef = useRef<HTMLDivElement>(null)
   const zoomDropdownRef = useRef<HTMLDivElement>(null)
+  const stampDropdownRef = useRef<HTMLDivElement>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const hoverPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  const cropDrawRef = useRef<{ startPt: Point } | null>(null)
+  const findInputRef = useRef<HTMLInputElement>(null)
   const isDrawingRef = useRef(false)
   const currentPtsRef = useRef<Point[]>([])
   const pdfFileRef = useRef(pdfFile)
@@ -389,6 +417,60 @@ export default function PdfAnnotateTool() {
           ctx.restore()
         }
       }
+    }
+
+    // Find highlights
+    if (findMatches.length > 0) {
+      ctx.save()
+      for (let fi = 0; fi < findMatches.length; fi++) {
+        const fm = findMatches[fi]
+        if (fm.pageNum !== pageNum) continue
+        const item = fm.item
+        ctx.globalAlpha = fi === findIdx ? 0.7 : 0.35
+        ctx.fillStyle = fi === findIdx ? '#f97316' : '#facc15'
+        ctx.fillRect(item.x * RENDER_SCALE, item.y * RENDER_SCALE, item.width * RENDER_SCALE, item.height * RENDER_SCALE)
+      }
+      ctx.restore()
+    }
+
+    // Crop region overlay
+    const cropRgn = cropRegions[pageNum]
+    if (cropRgn) {
+      const dims = pageDimsMap.current.get(pageNum)
+      if (dims) {
+        ctx.save()
+        ctx.globalAlpha = 0.45
+        ctx.fillStyle = '#000000'
+        // Outside crop: 4 rects
+        ctx.fillRect(0, 0, dims.width * RENDER_SCALE, cropRgn.y * RENDER_SCALE)
+        ctx.fillRect(0, (cropRgn.y + cropRgn.h) * RENDER_SCALE, dims.width * RENDER_SCALE, (dims.height - cropRgn.y - cropRgn.h) * RENDER_SCALE)
+        ctx.fillRect(0, cropRgn.y * RENDER_SCALE, cropRgn.x * RENDER_SCALE, cropRgn.h * RENDER_SCALE)
+        ctx.fillRect((cropRgn.x + cropRgn.w) * RENDER_SCALE, cropRgn.y * RENDER_SCALE, (dims.width - cropRgn.x - cropRgn.w) * RENDER_SCALE, cropRgn.h * RENDER_SCALE)
+        ctx.globalAlpha = 1
+        ctx.strokeStyle = '#f97316'
+        ctx.lineWidth = 2
+        ctx.setLineDash([6, 3])
+        ctx.strokeRect(cropRgn.x * RENDER_SCALE, cropRgn.y * RENDER_SCALE, cropRgn.w * RENDER_SCALE, cropRgn.h * RENDER_SCALE)
+        ctx.setLineDash([])
+        ctx.restore()
+      }
+    }
+
+    // Crop in-progress preview
+    if (activeTool === 'crop' && isActive && cropDrawRef.current && currentPtsRef.current.length >= 2) {
+      const cpts = currentPtsRef.current
+      const cx = Math.min(cpts[0].x, cpts[1].x)
+      const cy = Math.min(cpts[0].y, cpts[1].y)
+      const cw = Math.abs(cpts[1].x - cpts[0].x)
+      const ch = Math.abs(cpts[1].y - cpts[0].y)
+      ctx.save()
+      ctx.strokeStyle = '#f97316'
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 3])
+      ctx.globalAlpha = 0.8
+      ctx.strokeRect(cx * RENDER_SCALE, cy * RENDER_SCALE, cw * RENDER_SCALE, ch * RENDER_SCALE)
+      ctx.setLineDash([])
+      ctx.restore()
     }
 
     // ── In-progress elements (only on the active page) ──
@@ -589,7 +671,7 @@ export default function PdfAnnotateTool() {
     for (const m of pageMeasurements) {
       drawMeasurement(ctx, m, RENDER_SCALE, calibration, m.id === selectedMeasureId)
     }
-  }, [annotations, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId, getAnnotation])
+  }, [annotations, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId, getAnnotation, findMatches, findIdx, cropRegions])
 
   const redrawAll = useCallback(() => {
     for (const pageNum of renderedPagesRef.current) {
@@ -1099,6 +1181,46 @@ export default function PdfAnnotateTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { redrawPage(activePageRef.current) }, [selectedAnnId, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId])
 
+  // Redraw all when find matches change (they span all pages)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { redrawAll() }, [findMatches, findIdx, cropRegions])
+
+  // Find & Highlight: navigate to current match page
+  useEffect(() => {
+    if (findMatches.length > 0 && findMatches[findIdx]) {
+      navigateToPage(findMatches[findIdx].pageNum)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findIdx, findMatches])
+
+  // Find & Highlight: search text items when query changes
+  useEffect(() => {
+    if (!findQuery.trim()) { setFindMatches([]); setFindIdx(0); return }
+    const q = findQuery.toLowerCase()
+    const matches: { pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[] = []
+    for (const [key, items] of Object.entries(textItemsCacheRef.current)) {
+      const pageNum = parseInt(key.split('_')[0])
+      for (const item of items) {
+        if (item.text.toLowerCase().includes(q)) matches.push({ pageNum, item })
+      }
+    }
+    matches.sort((a, b) => a.pageNum - b.pageNum || a.item.y - b.item.y)
+    setFindMatches(matches)
+    setFindIdx(0)
+  }, [findQuery])
+
+  // Context menu: close on click outside
+  useEffect(() => {
+    if (!contextMenu) return
+    const handler = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [contextMenu])
+
   // ── Zoom at viewport center ─────────────────────────
 
   const zoomAtCenter = useCallback((newZoom: number) => {
@@ -1159,9 +1281,20 @@ export default function PdfAnnotateTool() {
       }
       if (editingTextId) return // Don't intercept other keys while editing text
 
+      // ── Ctrl+F: find ──
+      if (mod && e.key === 'f') {
+        e.preventDefault()
+        setFindOpen(o => { if (!o) setTimeout(() => findInputRef.current?.focus(), 50); return true })
+        return
+      }
+
       // ── Escape: context-dependent ──
       if (e.key === 'Escape') {
         e.preventDefault()
+        // Close context menu
+        if (contextMenu) { setContextMenu(null); return }
+        // Close find bar
+        if (findOpen) { setFindOpen(false); setFindQuery(''); setFindMatches([]); return }
         // Clear text selection toolbar
         if (selectTextToolbar) {
           setSelectTextToolbar(null); selectTextStartRef.current = null; selectTextRectsRef.current = []; redrawAll(); return
@@ -1431,7 +1564,8 @@ export default function PdfAnnotateTool() {
     window.addEventListener('keyup', keyUpHandler)
     return () => { window.removeEventListener('keydown', handler); window.removeEventListener('keyup', keyUpHandler) }
   }, [undo, redo, selectedAnnId, editingTextId, removeAnnotation, activeTool, selectedMeasureId,
-      redrawAll, redrawPage, annotations, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage, selectTextToolbar, zoomAtCenter, pushHistory, addToast])
+      redrawAll, redrawPage, annotations, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage, selectTextToolbar, zoomAtCenter, pushHistory, addToast,
+      contextMenu, findOpen])
 
   // ── Zoom with scroll wheel (cursor-position) ────────
 
@@ -1567,10 +1701,23 @@ export default function PdfAnnotateTool() {
     return () => document.removeEventListener('pointerdown', handler)
   }, [zoomDropdownOpen])
 
-  // ── Cache text items for text highlight ───────────────
+  // ── Close stamp dropdown on outside click ─────────────
 
   useEffect(() => {
-    if (!pdfFile || (activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'select')) return
+    if (!stampDropdownOpen) return
+    const handler = (e: PointerEvent) => {
+      if (stampDropdownRef.current && !stampDropdownRef.current.contains(e.target as Node)) {
+        setStampDropdownOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', handler)
+    return () => document.removeEventListener('pointerdown', handler)
+  }, [stampDropdownOpen])
+
+  // ── Cache text items for text highlight and find ───────────────
+
+  useEffect(() => {
+    if (!pdfFile || (activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'select' && !findOpen)) return
     // Cache text items for all rendered pages
     for (const pageNum of renderedPagesRef.current) {
       const rotation = pageRotations[pageNum] || 0
@@ -1580,7 +1727,7 @@ export default function PdfAnnotateTool() {
         textItemsCacheRef.current[cacheKey] = result.items
       }).catch(() => {})
     }
-  }, [pdfFile, activeTool, pageRotations, dimsReady])
+  }, [pdfFile, activeTool, pageRotations, dimsReady, findOpen])
 
   // ── Focus textarea when editing ──────────────────────
 
@@ -1986,6 +2133,35 @@ export default function PdfAnnotateTool() {
       return
     }
 
+    // ── Stamp tool: click to place ──
+    if (activeTool === 'stamp') {
+      const ann: Annotation = {
+        id: genId(),
+        type: 'stamp',
+        points: [{ x: pt.x - 60, y: pt.y - 20 }],
+        color: activeStampPreset.color,
+        strokeWidth: 2,
+        opacity: opacity / 100,
+        fontSize: 16,
+        width: 120,
+        height: 40,
+        stampType: activeStampPreset.label,
+        backgroundColor: activeStampPreset.bg,
+      }
+      commitAnnotation(ann)
+      setSelectedAnnId(ann.id)
+      if (!stickyTool) setActiveTool('select')
+      return
+    }
+
+    // ── Crop tool: start dragging crop region ──
+    if (activeTool === 'crop') {
+      cropDrawRef.current = { startPt: pt }
+      isDrawingRef.current = true
+      currentPtsRef.current = [pt]
+      return
+    }
+
     // ── Click-to-select (only for non-drawing tools) ──
     if (!DRAW_TYPES.has(activeTool) && activeTool !== 'eraser' && activeTool !== 'highlighter') {
       const hitAny = findAnnotationAt(pt)
@@ -2072,9 +2248,12 @@ export default function PdfAnnotateTool() {
     redrawPage(pageNum)
   }, [getPointForPage, activeTool, annotations, editingTextId, selectedAnnId, selectTextToolbar,
       commitTextEditing, commitAnnotation, getAnnotation, findTextAnnotationAt, findCalloutAt, findAnnotationAt, enterEditMode, redrawPage,
-      eraserRadius, eraserMode, zoom, color, strokeWidth, fontSize, opacity, fontFamily, bold, italic, underline, textAlign])
+      eraserRadius, eraserMode, zoom, color, strokeWidth, fontSize, opacity, fontFamily, bold, italic, underline, textAlign,
+      activeStampPreset, stickyTool])
 
   const handlePointerMove = useCallback((e: React.PointerEvent, pageNum: number) => {
+    // Track cursor position for hover tooltip
+    hoverPosRef.current = { x: e.clientX, y: e.clientY }
     // Space-to-pan: scroll viewport
     if (spaceHeldRef.current && panRef.current) {
       const el = scrollRef.current
@@ -2105,6 +2284,13 @@ export default function PdfAnnotateTool() {
     // Cloud polygon: track cursor for preview
     if (activeTool === 'cloud' && currentPtsRef.current.length > 0) {
       cloudPreviewRef.current = getPointForPage(ap, e)
+      redrawPage(ap)
+      return
+    }
+
+    // Crop tool: draw dashed rectangle preview
+    if (activeTool === 'crop' && cropDrawRef.current && isDrawingRef.current) {
+      currentPtsRef.current = [cropDrawRef.current.startPt, getPointForPage(ap, e)]
       redrawPage(ap)
       return
     }
@@ -2634,6 +2820,24 @@ export default function PdfAnnotateTool() {
       return
     }
 
+    // Crop tool: finalize crop region
+    if (activeTool === 'crop') {
+      if (cropDrawRef.current && currentPtsRef.current.length >= 2) {
+        const cpts = currentPtsRef.current
+        const x = Math.min(cpts[0].x, cpts[1].x)
+        const y = Math.min(cpts[0].y, cpts[1].y)
+        const w = Math.abs(cpts[1].x - cpts[0].x)
+        const h = Math.abs(cpts[1].y - cpts[0].y)
+        if (w > 5 && h > 5) {
+          setCropRegions(prev => ({ ...prev, [ap]: { x, y, w, h } }))
+        }
+      }
+      cropDrawRef.current = null
+      currentPtsRef.current = []
+      redrawPage(ap)
+      return
+    }
+
     // Text highlight / strikethrough: create annotation from preview rects
     if (activeTool === 'textHighlight' || activeTool === 'textStrikethrough') {
       const rects = textHighlightPreviewRectsRef.current
@@ -2670,7 +2874,7 @@ export default function PdfAnnotateTool() {
     const finalPts = isPencilOrHL ? decimatePoints([...pts], isHL ? 1.0 : 0.5) : [...pts]
     const ann: Annotation = {
       id: genId(),
-      type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough'>,
+      type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'crop'>,
       points: finalPts,
       color,
       strokeWidth: isHL ? strokeWidth * 3 : strokeWidth,
@@ -2683,8 +2887,9 @@ export default function PdfAnnotateTool() {
     }
     currentPtsRef.current = []
     commitAnnotation(ann)
+    if (!stickyTool) setActiveTool('select')
   }, [activeTool, color, strokeWidth, opacity, fontSize, fillColor, cornerRadius, dashPattern, arrowStart, commitAnnotation,
-      pushHistory, redrawPage, annotations, getAnnotation, updateAnnotation, selectedAnnId])
+      pushHistory, redrawPage, annotations, getAnnotation, updateAnnotation, selectedAnnId, stickyTool])
 
   // ── Export annotated PDF ─────────────────────────────
 
@@ -3064,6 +3269,32 @@ export default function PdfAnnotateTool() {
               }
               break
             }
+            case 'stamp': {
+              if (!ann.points.length || !ann.width || !ann.height) break
+              const sp = toPC({ x: ann.points[0].x + ann.width / 2, y: ann.points[0].y + ann.height / 2 })
+              const sr = parseInt((ann.color || '#000000').slice(1, 3), 16) / 255
+              const sg = parseInt((ann.color || '#000000').slice(3, 5), 16) / 255
+              const sb = parseInt((ann.color || '#000000').slice(5, 7), 16) / 255
+              const sc = rgb(sr, sg, sb)
+              const stampFont = await getFont(ann.fontFamily || 'Arial', true, false)
+              const stampLabel = ann.stampType || 'STAMP'
+              const stampFs = Math.min(ann.height * 0.42, 18)
+              const tw = stampFont.widthOfTextAtSize(stampLabel, stampFs)
+              const stampPt = toPC(ann.points[0])
+              const stampTr = toPC({ x: ann.points[0].x + ann.width, y: ann.points[0].y })
+              const stampW = Math.abs(stampTr.x - stampPt.x)
+              const stampH = ann.height
+              page.drawRectangle({
+                x: Math.min(stampPt.x, stampTr.x), y: stampPt.y - stampH,
+                width: stampW, height: stampH,
+                borderColor: sc, borderWidth: 1.5, opacity: ann.opacity,
+              })
+              page.drawText(stampLabel, {
+                x: sp.x - tw / 2, y: sp.y - stampFs / 2,
+                size: stampFs, font: stampFont, color: sc, opacity: ann.opacity,
+              })
+              break
+            }
           }
         }
       }
@@ -3132,6 +3363,24 @@ export default function PdfAnnotateTool() {
         const page = pages[pageNum - 1]
         const existingRot = page.getRotation().angle
         page.setRotation(degrees((existingRot + rot) % 360))
+      }
+
+      // Apply crop regions
+      for (const [pageStr, cropRgn] of Object.entries(cropRegions)) {
+        const cropPageNum = parseInt(pageStr)
+        if (cropPageNum < 1 || cropPageNum > pages.length) continue
+        const cropPage = pages[cropPageNum - 1]
+        const { width: cpw, height: cph } = cropPage.getSize()
+        const cropRot = pageRotations[cropPageNum] || 0
+        const blPdf = toPdfCoords({ x: cropRgn.x, y: cropRgn.y + cropRgn.h }, cpw, cph, cropRot)
+        const trPdf = toPdfCoords({ x: cropRgn.x + cropRgn.w, y: cropRgn.y }, cpw, cph, cropRot)
+        const minX = Math.min(blPdf.x, trPdf.x)
+        const minY = Math.min(blPdf.y, trPdf.y)
+        const cropW = Math.abs(trPdf.x - blPdf.x)
+        const cropH = Math.abs(trPdf.y - blPdf.y)
+        if (cropW > 0 && cropH > 0) {
+          cropPage.setMediaBox(minX, minY, cropW, cropH)
+        }
       }
 
       const pdfBytes = await doc.save()
@@ -3256,7 +3505,7 @@ export default function PdfAnnotateTool() {
   const isShapeAnnSelected = selectedAnn && !isTextAnnSelected
 
   // Properties bar context
-  const showPropsForTool = activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure'
+  const showPropsForTool = activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'stamp' && activeTool !== 'crop'
   const showPropsForSelection = activeTool === 'select' && selectedAnn
   const showTextProps = (isTextAnnSelected && activeTool === 'select') || activeTool === 'text' || activeTool === 'callout'
   const showStrokeWidth = (isShapeAnnSelected && activeTool === 'select') ||
@@ -3265,6 +3514,7 @@ export default function PdfAnnotateTool() {
   const showColorPicker = showPropsForTool || showPropsForSelection
   const showEraserControls = activeTool === 'eraser'
   const showMeasureControls = activeTool === 'measure'
+  const showCropControls = activeTool === 'crop'
 
   return (
     <div className="h-full flex flex-col">
@@ -3320,7 +3570,41 @@ export default function PdfAnnotateTool() {
           <Maximize size={14} />
         </button>
 
+        {/* Page jump input */}
+        {pdfFile.pageCount > 1 && (
+          <div className="flex items-center gap-0.5 ml-1">
+            {pageInputActive ? (
+              <input
+                type="number" min={1} max={pdfFile.pageCount}
+                defaultValue={currentPage} autoFocus
+                className="w-14 text-center text-xs bg-white/[0.06] border border-white/20 rounded px-1 py-0.5 text-white outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                onBlur={e => { navigateToPage(Math.max(1, Math.min(pdfFile.pageCount, Number(e.target.value)))); setPageInputActive(false) }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { navigateToPage(Math.max(1, Math.min(pdfFile.pageCount, Number(e.currentTarget.value)))); setPageInputActive(false) }
+                  if (e.key === 'Escape') setPageInputActive(false)
+                }}
+              />
+            ) : (
+              <button onClick={() => setPageInputActive(true)} className="text-xs text-white/40 hover:text-white/80 tabular-nums px-1 rounded hover:bg-white/[0.06]">
+                {currentPage} / {pdfFile.pageCount}
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="flex-1" />
+
+        {/* Find button */}
+        <button onClick={() => { setFindOpen(o => !o); setTimeout(() => findInputRef.current?.focus(), 50) }} title="Find text (Ctrl+F)"
+          className={`p-1 rounded-lg transition-colors ${findOpen ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'}`}>
+          <Search size={14} />
+        </button>
+
+        {/* Annotation list button */}
+        <button onClick={() => setAnnListOpen(o => !o)} title="Annotation list"
+          className={`p-1 rounded-lg transition-colors ${annListOpen ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'}`}>
+          <List size={14} />
+        </button>
 
         {/* Export & Reset */}
         {exportError && (
@@ -3336,6 +3620,46 @@ export default function PdfAnnotateTool() {
           New
         </Button>
       </div>
+
+      {/* ── Find Bar ── */}
+      {findOpen && (
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-white/[0.06] bg-[#001218] flex-shrink-0">
+          <Search size={12} className="text-white/40 flex-shrink-0" />
+          <input
+            ref={findInputRef}
+            type="text"
+            placeholder="Find text..."
+            value={findQuery}
+            onChange={e => setFindQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                if (findMatches.length === 0) return
+                if (e.shiftKey) setFindIdx(i => (i - 1 + findMatches.length) % findMatches.length)
+                else setFindIdx(i => (i + 1) % findMatches.length)
+              }
+              if (e.key === 'Escape') { setFindOpen(false); setFindQuery(''); setFindMatches([]) }
+            }}
+            className="flex-1 bg-transparent text-xs text-white outline-none placeholder:text-white/30"
+          />
+          {findMatches.length > 0 && (
+            <span className="text-xs text-white/40 flex-shrink-0">{findIdx + 1} / {findMatches.length}</span>
+          )}
+          {findQuery && findMatches.length === 0 && (
+            <span className="text-xs text-red-400/70 flex-shrink-0">No matches</span>
+          )}
+          <button onClick={() => setFindIdx(i => (i - 1 + Math.max(1, findMatches.length)) % Math.max(1, findMatches.length))} disabled={findMatches.length === 0}
+            className="p-0.5 text-white/40 hover:text-white disabled:opacity-30 rounded">
+            <ChevronLeft size={12} />
+          </button>
+          <button onClick={() => setFindIdx(i => (i + 1) % Math.max(1, findMatches.length))} disabled={findMatches.length === 0}
+            className="p-0.5 text-white/40 hover:text-white disabled:opacity-30 rounded">
+            <ChevronRight size={12} />
+          </button>
+          <button onClick={() => { setFindOpen(false); setFindQuery(''); setFindMatches([]) }} className="p-0.5 text-white/40 hover:text-white rounded">
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* ── Contextual Properties Bar ── */}
       <div className="flex items-center gap-2 px-3 py-1 border-b border-white/[0.06] flex-shrink-0 min-h-[28px]">
@@ -3701,6 +4025,20 @@ export default function PdfAnnotateTool() {
           </>
         )}
 
+        {/* Crop controls */}
+        {showCropControls && (
+          <>
+            <span className="text-[10px] text-white/40">Drag to set crop region</span>
+            {cropRegions[currentPage] && (
+              <button
+                onClick={() => { setCropRegions(prev => { const next = { ...prev }; delete next[currentPage]; return next }) }}
+                className="px-1.5 py-0.5 rounded text-[10px] text-white/40 hover:text-white/60 border border-white/[0.08]">
+                Clear Crop
+              </button>
+            )}
+          </>
+        )}
+
         {/* Select hint */}
         {activeTool === 'select' && !selectedAnn && (
           <span className="text-[10px] text-white/25 italic">Click to select annotations</span>
@@ -3773,6 +4111,14 @@ export default function PdfAnnotateTool() {
                     onPointerMove={e => handlePointerMove(e, pageNum)}
                     onPointerUp={handlePointerUp}
                     onPointerCancel={handlePointerUp}
+                    onContextMenu={e => {
+                      e.preventDefault()
+                      const pt = getPointForPage(pageNum, e)
+                      const ann = findAnnotationAt(pt, pageNum)
+                      if (!ann) return
+                      setSelectedAnnId(ann.id)
+                      setContextMenu({ x: e.clientX, y: e.clientY, annId: ann.id, pageNum })
+                    }}
                     onMouseLeave={() => { if (activeTool === 'eraser') setEraserCursorPos(null) }}
                   />
                   {/* Eraser circle cursor on this page */}
@@ -3958,6 +4304,42 @@ export default function PdfAnnotateTool() {
               activeTool === 'measure' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
             }`}>
             <Ruler size={16} />
+          </button>
+          {/* Stamp */}
+          <div ref={stampDropdownRef} className="relative">
+            <button
+              onClick={() => { setActiveTool('stamp'); setStampDropdownOpen(o => !o) }}
+              title="Stamp"
+              className={`p-1.5 rounded-lg transition-colors ${
+                activeTool === 'stamp' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+              }`}>
+              <Tag size={16} />
+            </button>
+            {stampDropdownOpen && (
+              <div className="absolute top-0 right-full mr-1 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-lg z-50 py-1 min-w-[160px]">
+                {STAMP_PRESETS.map(preset => (
+                  <button key={preset.label}
+                    onClick={() => { setActiveStampPreset(preset); setStampDropdownOpen(false) }}
+                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                      activeStampPreset.label === preset.label ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
+                    }`}>
+                    <span className="font-bold text-[10px]" style={{ color: preset.color }}>{preset.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Crop */}
+          <button onClick={() => setActiveTool('crop')} title="Crop page"
+            className={`p-1.5 rounded-lg transition-colors ${
+              activeTool === 'crop' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+            }`}>
+            <Crop size={16} />
+          </button>
+          <div className="h-px w-6 bg-white/[0.08]" />
+          {/* Sticky tool pin */}
+          <button onClick={() => setStickyTool(v => !v)} title="Lock tool (stay on current tool after drawing)">
+            <Pin size={14} className={stickyTool ? 'text-[#F47B20]' : 'text-white/30'} />
           </button>
           <div className="h-px w-6 bg-white/[0.08]" />
           {/* Undo/Redo */}
@@ -4258,6 +4640,114 @@ export default function PdfAnnotateTool() {
           )
         })()}
       </Modal>
+
+      {/* ── Hover Tooltip ── */}
+      {hoveredAnnId && !editingTextId && activeTool === 'select' && (() => {
+        const ann = findAnnotationPage(hoveredAnnId) !== null
+          ? (annotations[findAnnotationPage(hoveredAnnId)!] || []).find(a => a.id === hoveredAnnId)
+          : null
+        if (!ann) return null
+        const label = annLabel(ann)
+        const opacityNote = ann.opacity < 1 ? ` · ${Math.round(ann.opacity * 100)}%` : ''
+        return (
+          <div
+            className="fixed z-50 pointer-events-none bg-[#001a24] border border-white/10 text-xs text-white/70 px-2 py-1 rounded shadow-lg"
+            style={{ left: hoverPosRef.current.x + 14, top: hoverPosRef.current.y - 28 }}
+          >
+            {label}{opacityNote}
+          </div>
+        )
+      })()}
+
+      {/* ── Context Menu ── */}
+      {contextMenu && (() => {
+        const { annId, pageNum: cmPageNum } = contextMenu
+        const cmAnn = (annotations[cmPageNum] || []).find(a => a.id === annId)
+        if (!cmAnn) return null
+
+        const doAction = (fn: () => void) => { fn(); setContextMenu(null) }
+
+        const bringToFront = () => {
+          const pageAnns = annotations[cmPageNum] || []
+          const idx = pageAnns.findIndex(a => a.id === annId)
+          if (idx < 0 || idx === pageAnns.length - 1) return
+          const next = [...pageAnns]
+          next.push(next.splice(idx, 1)[0])
+          const result = { ...annotations, [cmPageNum]: next }
+          setAnnotations(result); pushHistory(result)
+        }
+        const sendToBack = () => {
+          const pageAnns = annotations[cmPageNum] || []
+          const idx = pageAnns.findIndex(a => a.id === annId)
+          if (idx <= 0) return
+          const next = [...pageAnns]
+          next.unshift(next.splice(idx, 1)[0])
+          const result = { ...annotations, [cmPageNum]: next }
+          setAnnotations(result); pushHistory(result)
+        }
+        const duplicate = () => {
+          const dup: Annotation = { ...structuredClone(cmAnn), id: genId(), points: cmAnn.points.map(p => ({ x: p.x + 20, y: p.y + 20 })), arrows: cmAnn.arrows?.map(p => ({ x: p.x + 20, y: p.y + 20 })) }
+          commitAnnotation(dup); setSelectedAnnId(dup.id)
+        }
+        const del = () => { removeAnnotation(annId, cmPageNum); setSelectedAnnId(null) }
+        const copyStyle = () => { copiedStyleRef.current = { color: cmAnn.color, strokeWidth: cmAnn.strokeWidth, opacity: cmAnn.opacity, fontFamily: cmAnn.fontFamily, fontSize: cmAnn.fontSize, bold: cmAnn.bold, italic: cmAnn.italic } }
+        const pasteStyle = () => {
+          const s = copiedStyleRef.current; if (!s) return
+          updateAnnotation(annId, s, cmPageNum)
+        }
+
+        return (
+          <div
+            ref={contextMenuRef}
+            className="fixed z-50 bg-[#001a24] border border-white/10 rounded-lg shadow-xl py-1 min-w-[160px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button onClick={() => doAction(duplicate)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Duplicate</button>
+            <button onClick={() => doAction(del)} className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-white/[0.06]">Delete</button>
+            <div className="h-px bg-white/[0.08] my-1" />
+            <button onClick={() => doAction(bringToFront)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Bring to Front</button>
+            <button onClick={() => doAction(sendToBack)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Send to Back</button>
+            <div className="h-px bg-white/[0.08] my-1" />
+            <button onClick={() => doAction(copyStyle)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Copy Style</button>
+            <button onClick={() => doAction(pasteStyle)} disabled={!copiedStyleRef.current} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06] disabled:opacity-40">Paste Style</button>
+          </div>
+        )
+      })()}
+
+      {/* ── Annotation List Panel ── */}
+      {annListOpen && pdfFile && (
+        <div className="fixed right-12 top-[80px] z-40 w-52 max-h-[60vh] bg-[#001a24] border border-white/10 rounded-lg shadow-xl flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-white/[0.06]">
+            <span className="text-xs font-medium text-white/70">Annotations</span>
+            <button onClick={() => setAnnListOpen(false)} className="text-white/40 hover:text-white"><X size={12} /></button>
+          </div>
+          <div className="overflow-y-auto flex-1 py-1">
+            {Object.entries(annotations).filter(([, anns]) => anns.length > 0).length === 0 ? (
+              <div className="px-3 py-4 text-xs text-white/30 text-center">No annotations</div>
+            ) : (
+              Object.entries(annotations)
+                .sort(([a], [b]) => Number(a) - Number(b))
+                .map(([pageStr, anns]) => anns.length === 0 ? null : (
+                  <div key={pageStr}>
+                    <div className="px-3 py-1 text-[10px] text-white/30 font-medium">Page {pageStr} ({anns.length})</div>
+                    {anns.map(ann => (
+                      <button
+                        key={ann.id}
+                        onClick={() => {
+                          navigateToPage(Number(pageStr))
+                          setSelectedAnnId(ann.id)
+                        }}
+                        className={`w-full text-left px-3 py-1 text-xs truncate hover:bg-white/[0.06] transition-colors ${selectedAnnId === ann.id ? 'text-[#F47B20]' : 'text-white/60'}`}
+                      >
+                        {annLabel(ann)}
+                      </button>
+                    ))}
+                  </div>
+                ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
