@@ -3515,6 +3515,13 @@ export default function PdfAnnotateTool() {
     measurePreviewRef.current = null
   }, [])
 
+  // ── Pre-render derived values (must be before any early return) ──
+
+  // Memoize total annotation count so badge doesn't recompute on every render
+  const totalAnnotationCount = useMemo(() =>
+    Object.values(annotations).reduce((s, a) => s + a.length, 0)
+  , [annotations])
+
   // ── Render ───────────────────────────────────────────
 
   if (!pdfFile) {
@@ -3587,11 +3594,6 @@ export default function PdfAnnotateTool() {
   const editingAnn = editingTextId ? getAnnotation(editingTextId) : null
   const selectedAnn = selectedAnnId ? getAnnotation(selectedAnnId) : null
   const isTextAnnSelected = selectedAnn && (selectedAnn.type === 'text' || selectedAnn.type === 'callout')
-  // Memoize total annotation count so badge doesn't recompute on every render
-  const totalAnnotationCount = useMemo(() =>
-    Object.values(annotations).reduce((s, a) => s + a.length, 0)
-  , [annotations])
-
   const isShapeAnnSelected = selectedAnn && !isTextAnnSelected
 
   // Properties bar context
