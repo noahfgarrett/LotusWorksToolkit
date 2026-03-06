@@ -154,6 +154,7 @@ export default function PdfAnnotateTool() {
   const [findMatches, setFindMatches] = useState<{ pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[]>([])
   const [findIdx, setFindIdx] = useState(0)
   const [findCacheTick, setFindCacheTick] = useState(0)
+  const [findCaseSensitive, setFindCaseSensitive] = useState(false)
   const [stampDropdownOpen, setStampDropdownOpen] = useState(false)
   const [activeStampPreset, setActiveStampPreset] = useState(STAMP_PRESETS[0])
   const [cropRegions, setCropRegions] = useState<Record<number, { x: number; y: number; w: number; h: number }>>({})
@@ -1187,30 +1188,45 @@ export default function PdfAnnotateTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { redrawAll() }, [findMatches, findIdx, cropRegions])
 
-  // Find & Highlight: navigate to current match page
+  // Find & Highlight: navigate to current match page + scroll into view
   useEffect(() => {
-    if (findMatches.length > 0 && findMatches[findIdx]) {
-      navigateToPage(findMatches[findIdx].pageNum)
-    }
+    if (findMatches.length === 0 || !findMatches[findIdx]) return
+    const match = findMatches[findIdx]
+    navigateToPage(match.pageNum)
+    // Scroll the match into view within the canvas scroll container
+    requestAnimationFrame(() => {
+      const scrollEl = scrollRef.current
+      const refs = pageRefsMap.current.get(match.pageNum)
+      if (!scrollEl || !refs) return
+      const scale = RENDER_SCALE * zoomRef.current
+      const matchCenterX = match.item.x * scale + match.item.width * scale / 2
+      const matchCenterY = match.item.y * scale + match.item.height * scale / 2
+      const canvasRect = refs.annCanvas.getBoundingClientRect()
+      const scrollRect = scrollEl.getBoundingClientRect()
+      const targetScrollLeft = scrollEl.scrollLeft + (canvasRect.left - scrollRect.left) + matchCenterX - scrollEl.clientWidth / 2
+      const targetScrollTop = scrollEl.scrollTop + (canvasRect.top - scrollRect.top) + matchCenterY - scrollEl.clientHeight / 2
+      scrollEl.scrollTo({ left: Math.max(0, targetScrollLeft), top: Math.max(0, targetScrollTop), behavior: 'smooth' })
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findIdx, findMatches])
 
   // Find & Highlight: search text items when query or cache changes
   useEffect(() => {
     if (!findQuery.trim()) { setFindMatches([]); setFindIdx(0); return }
-    const q = findQuery.toLowerCase()
+    const q = findCaseSensitive ? findQuery : findQuery.toLowerCase()
     const matches: { pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[] = []
     for (const [key, items] of Object.entries(textItemsCacheRef.current)) {
       const pageNum = parseInt(key.split('_')[0])
       for (const item of items) {
-        if (item.text.toLowerCase().includes(q)) matches.push({ pageNum, item })
+        const text = findCaseSensitive ? item.text : item.text.toLowerCase()
+        if (text.includes(q)) matches.push({ pageNum, item })
       }
     }
     matches.sort((a, b) => a.pageNum - b.pageNum || a.item.y - b.item.y)
     setFindMatches(matches)
     setFindIdx(prev => (prev < matches.length ? prev : 0))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [findQuery, findCacheTick])
+  }, [findQuery, findCacheTick, findCaseSensitive])
 
   // Context menu: close on click outside
   useEffect(() => {
@@ -1284,10 +1300,16 @@ export default function PdfAnnotateTool() {
       }
       if (editingTextId) return // Don't intercept other keys while editing text
 
-      // ── Ctrl+F: find ──
+      // ── Ctrl+F: find | F3/Shift+F3: next/prev match ──
       if (mod && e.key === 'f') {
         e.preventDefault()
         setFindOpen(o => { if (!o) setTimeout(() => findInputRef.current?.focus(), 50); return true })
+        return
+      }
+      if (e.key === 'F3') {
+        e.preventDefault()
+        if (!findOpen) { setFindOpen(true); setTimeout(() => findInputRef.current?.focus(), 50); return }
+        setFindIdx(i => e.shiftKey ? (i - 1 + Math.max(1, findMatches.length)) % Math.max(1, findMatches.length) : (i + 1) % Math.max(1, findMatches.length))
         return
       }
 
@@ -1580,7 +1602,7 @@ export default function PdfAnnotateTool() {
     return () => { window.removeEventListener('keydown', handler); window.removeEventListener('keyup', keyUpHandler) }
   }, [undo, redo, selectedAnnId, editingTextId, removeAnnotation, activeTool, selectedMeasureId,
       redrawAll, redrawPage, annotations, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage, selectTextToolbar, zoomAtCenter, pushHistory, addToast,
-      contextMenu, findOpen])
+      contextMenu, findOpen, findMatches])
 
   // ── Zoom with scroll wheel (cursor-position) ────────
 
@@ -3690,6 +3712,13 @@ export default function PdfAnnotateTool() {
           {findQuery && findMatches.length === 0 && (
             <span className="text-xs text-red-400/70 flex-shrink-0">No matches</span>
           )}
+          <button
+            onClick={() => setFindCaseSensitive(v => !v)}
+            title="Case sensitive (Alt+C)"
+            className={`px-1 py-0.5 rounded text-[10px] font-medium flex-shrink-0 transition-colors ${
+              findCaseSensitive ? 'bg-[#F47B20]/20 text-[#F47B20] border border-[#F47B20]/30' : 'text-white/30 hover:text-white/50 border border-white/[0.08]'
+            }`}
+          >Aa</button>
           <button onClick={() => setFindIdx(i => (i - 1 + Math.max(1, findMatches.length)) % Math.max(1, findMatches.length))} disabled={findMatches.length === 0}
             className="p-0.5 text-white/40 hover:text-white disabled:opacity-30 rounded">
             <ChevronLeft size={12} />
@@ -4068,22 +4097,33 @@ export default function PdfAnnotateTool() {
           </>
         )}
 
-        {/* Stamp controls */}
-        {activeTool === 'stamp' && (
+        {/* Stamp controls — tool mode or stamp selected */}
+        {(activeTool === 'stamp' || (activeTool === 'select' && selectedAnn?.type === 'stamp')) && (
           <div className="flex items-center gap-1 flex-wrap">
-            {STAMP_PRESETS.map(preset => (
-              <button
-                key={preset.label}
-                onClick={() => setActiveStampPreset(preset)}
-                className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors border ${
-                  activeStampPreset.label === preset.label
-                    ? 'border-current ring-1 ring-inset ring-current'
-                    : 'border-white/[0.1] text-white/40 hover:border-white/30 hover:text-white/70'
-                }`}
-                style={activeStampPreset.label === preset.label ? { color: preset.color, borderColor: preset.color } : {}}>
-                {preset.label}
-              </button>
-            ))}
+            {STAMP_PRESETS.map(preset => {
+              const isActive = activeTool === 'stamp'
+                ? activeStampPreset.label === preset.label
+                : selectedAnn?.stampType === preset.label
+              return (
+                <button
+                  key={preset.label}
+                  onClick={() => {
+                    if (activeTool === 'stamp') { setActiveStampPreset(preset) }
+                    else if (selectedAnnId) {
+                      const p = STAMP_PRESETS.find(s => s.label === preset.label)
+                      if (p) updateAnnotation(selectedAnnId, { stampType: p.label, color: p.color, backgroundColor: p.bg })
+                    }
+                  }}
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors border ${
+                    isActive
+                      ? 'border-current ring-1 ring-inset ring-current'
+                      : 'border-white/[0.1] text-white/40 hover:border-white/30 hover:text-white/70'
+                  }`}
+                  style={isActive ? { color: preset.color, borderColor: preset.color } : {}}>
+                  {preset.label}
+                </button>
+              )
+            })}
           </div>
         )}
 
@@ -4586,10 +4626,12 @@ export default function PdfAnnotateTool() {
                   type="number"
                   min={1}
                   max={pdfFile.pageCount}
-                  value={currentPage}
-                  onChange={e => {
-                    const val = parseInt(e.target.value)
-                    if (!isNaN(val) && val >= 1 && val <= pdfFile.pageCount) navigateToPage(val)
+                  key={currentPage}
+                  defaultValue={currentPage}
+                  onBlur={e => { const val = parseInt(e.target.value); if (!isNaN(val)) navigateToPage(Math.max(1, Math.min(pdfFile.pageCount, val))) }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { const val = parseInt(e.currentTarget.value); if (!isNaN(val)) { navigateToPage(Math.max(1, Math.min(pdfFile.pageCount, val))); e.currentTarget.blur() } }
+                    if (e.key === 'Escape') e.currentTarget.blur()
                   }}
                   className="w-8 px-0.5 py-0 text-[11px] text-center text-white/50 bg-transparent border border-white/[0.1] rounded focus:border-[#F47B20]/50 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
@@ -4770,11 +4812,27 @@ export default function PdfAnnotateTool() {
             className="fixed z-50 bg-[#001a24] border border-white/10 rounded-lg shadow-xl py-1 min-w-[160px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            <button onClick={() => doAction(duplicate)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Duplicate</button>
-            <button onClick={() => doAction(del)} className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-white/[0.06]">Delete</button>
+            {([
+              { label: 'Duplicate', hint: 'Ctrl+D', action: duplicate, cls: 'text-white/70 hover:text-white' },
+              { label: 'Delete', hint: 'Del', action: del, cls: 'text-red-400 hover:text-red-300' },
+            ] as { label: string; hint: string; action: () => void; cls: string }[]).map(({ label, hint, action, cls }) => (
+              <button key={label} onClick={() => doAction(action)}
+                className={`w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-white/[0.06] ${cls}`}>
+                <span>{label}</span>
+                <span className="text-white/25 text-[10px]">{hint}</span>
+              </button>
+            ))}
             <div className="h-px bg-white/[0.08] my-1" />
-            <button onClick={() => doAction(bringToFront)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Bring to Front</button>
-            <button onClick={() => doAction(sendToBack)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Send to Back</button>
+            {([
+              { label: 'Bring to Front', hint: 'Ctrl+]', action: bringToFront },
+              { label: 'Send to Back', hint: 'Ctrl+[', action: sendToBack },
+            ] as { label: string; hint: string; action: () => void }[]).map(({ label, hint, action }) => (
+              <button key={label} onClick={() => doAction(action)}
+                className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">
+                <span>{label}</span>
+                <span className="text-white/25 text-[10px]">{hint}</span>
+              </button>
+            ))}
             <div className="h-px bg-white/[0.08] my-1" />
             <button onClick={() => doAction(copyStyle)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Copy Style</button>
             <button onClick={() => doAction(pasteStyle)} disabled={!copiedStyleRef.current} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06] disabled:opacity-40">Paste Style</button>
@@ -4799,18 +4857,29 @@ export default function PdfAnnotateTool() {
                   <div key={pageStr}>
                     <div className="px-3 py-1 text-[10px] text-white/30 font-medium">Page {pageStr} ({anns.length})</div>
                     {anns.map(ann => (
-                      <button
+                      <div
                         key={ann.id}
-                        onClick={() => {
-                          navigateToPage(Number(pageStr))
-                          setSelectedAnnId(ann.id)
-                          setActiveTool('select')
-                        }}
-                        className={`w-full text-left px-3 py-1 text-xs truncate hover:bg-white/[0.06] transition-colors flex items-center gap-1.5 ${selectedAnnId === ann.id ? 'text-[#F47B20]' : 'text-white/60'}`}
+                        className={`group flex items-center gap-1 px-2 py-1 hover:bg-white/[0.06] transition-colors ${selectedAnnId === ann.id ? 'bg-white/[0.04]' : ''}`}
                       >
-                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: ann.color }} />
-                        <span className="truncate">{annLabel(ann)}</span>
-                      </button>
+                        <button
+                          onClick={() => {
+                            navigateToPage(Number(pageStr))
+                            setSelectedAnnId(ann.id)
+                            setActiveTool('select')
+                          }}
+                          className={`flex-1 text-left text-xs flex items-center gap-1.5 min-w-0 ${selectedAnnId === ann.id ? 'text-[#F47B20]' : 'text-white/60'}`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: ann.color }} />
+                          <span className="truncate">{annLabel(ann)}</span>
+                        </button>
+                        <button
+                          onClick={() => { removeAnnotation(ann.id, Number(pageStr)); if (selectedAnnId === ann.id) setSelectedAnnId(null) }}
+                          title="Delete annotation"
+                          className="opacity-0 group-hover:opacity-100 p-0.5 text-white/30 hover:text-red-400 transition-all flex-shrink-0"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 ))
