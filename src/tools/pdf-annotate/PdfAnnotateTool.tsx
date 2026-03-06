@@ -153,6 +153,7 @@ export default function PdfAnnotateTool() {
   const [findOpen, setFindOpen] = useState(false)
   const [findMatches, setFindMatches] = useState<{ pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[]>([])
   const [findIdx, setFindIdx] = useState(0)
+  const [findCacheTick, setFindCacheTick] = useState(0)
   const [stampDropdownOpen, setStampDropdownOpen] = useState(false)
   const [activeStampPreset, setActiveStampPreset] = useState(STAMP_PRESETS[0])
   const [cropRegions, setCropRegions] = useState<Record<number, { x: number; y: number; w: number; h: number }>>({})
@@ -257,6 +258,7 @@ export default function PdfAnnotateTool() {
   const stampDropdownRef = useRef<HTMLDivElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const hoverPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
   const cropDrawRef = useRef<{ startPt: Point } | null>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
   const isDrawingRef = useRef(false)
@@ -1193,7 +1195,7 @@ export default function PdfAnnotateTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findIdx, findMatches])
 
-  // Find & Highlight: search text items when query changes
+  // Find & Highlight: search text items when query or cache changes
   useEffect(() => {
     if (!findQuery.trim()) { setFindMatches([]); setFindIdx(0); return }
     const q = findQuery.toLowerCase()
@@ -1206,8 +1208,9 @@ export default function PdfAnnotateTool() {
     }
     matches.sort((a, b) => a.pageNum - b.pageNum || a.item.y - b.item.y)
     setFindMatches(matches)
-    setFindIdx(0)
-  }, [findQuery])
+    setFindIdx(prev => (prev < matches.length ? prev : 0))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findQuery, findCacheTick])
 
   // Context menu: close on click outside
   useEffect(() => {
@@ -1536,11 +1539,23 @@ export default function PdfAnnotateTool() {
         return
       }
 
+      // ── Ctrl+A: Select all annotations on current page ──
+      if (mod && e.key === 'a' && !editingTextId) {
+        e.preventDefault()
+        const pageAnns = annotations[activePageRef.current] || []
+        if (pageAnns.length > 0) {
+          setSelectedAnnId(pageAnns[pageAnns.length - 1].id)
+          setActiveTool('select')
+        }
+        return
+      }
+
       // ── Single-letter tool switching (no modifier) ──
       if (!mod && !e.shiftKey && !e.altKey) {
         const toolMap: Record<string, ToolType> = {
           s: 'select', p: 'pencil', l: 'line', a: 'arrow', r: 'rectangle', c: 'circle', k: 'cloud',
           t: 'text', o: 'callout', e: 'eraser', h: 'highlighter', m: 'measure',
+          g: 'stamp', x: 'crop',
         }
         const mapped = toolMap[e.key.toLowerCase()]
         if (mapped) {
@@ -1718,13 +1733,17 @@ export default function PdfAnnotateTool() {
 
   useEffect(() => {
     if (!pdfFile || (activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'select' && !findOpen)) return
-    // Cache text items for all rendered pages
-    for (const pageNum of renderedPagesRef.current) {
+    // When find is open, cache ALL pages; otherwise only rendered pages
+    const pagesToCache = findOpen
+      ? Array.from({ length: pdfFile.pageCount }, (_, i) => i + 1)
+      : Array.from(renderedPagesRef.current)
+    for (const pageNum of pagesToCache) {
       const rotation = pageRotations[pageNum] || 0
       const cacheKey = `${pageNum}_${rotation}`
       if (textItemsCacheRef.current[cacheKey]) continue
       extractPositionedText(pdfFile, pageNum, rotation).then(result => {
         textItemsCacheRef.current[cacheKey] = result.items
+        if (findOpen) setFindCacheTick(t => t + 1)
       }).catch(() => {})
     }
   }, [pdfFile, activeTool, pageRotations, dimsReady, findOpen])
@@ -1985,6 +2004,8 @@ export default function PdfAnnotateTool() {
           ...(dashPattern !== 'solid' ? { dashPattern } : {}),
         }
         commitAnnotation(ann)
+        setSelectedAnnId(ann.id)
+        if (!stickyTool) setActiveTool('select')
         currentPtsRef.current = []
         cloudPreviewRef.current = null
         cloudLastClickRef.current = { time: 0, pt: { x: 0, y: 0 } }
@@ -2252,8 +2273,9 @@ export default function PdfAnnotateTool() {
       activeStampPreset, stickyTool])
 
   const handlePointerMove = useCallback((e: React.PointerEvent, pageNum: number) => {
-    // Track cursor position for hover tooltip
+    // Track cursor position for hover tooltip (state so tooltip renders at correct pos)
     hoverPosRef.current = { x: e.clientX, y: e.clientY }
+    setHoverPos({ x: e.clientX, y: e.clientY })
     // Space-to-pan: scroll viewport
     if (spaceHeldRef.current && panRef.current) {
       const el = scrollRef.current
@@ -2887,6 +2909,10 @@ export default function PdfAnnotateTool() {
     }
     currentPtsRef.current = []
     commitAnnotation(ann)
+    // Auto-select shapes/arrows/lines after drawing; skip pencil & highlighter
+    if (activeTool !== 'pencil' && activeTool !== 'highlighter') {
+      setSelectedAnnId(ann.id)
+    }
     if (!stickyTool) setActiveTool('select')
   }, [activeTool, color, strokeWidth, opacity, fontSize, fillColor, cornerRadius, dashPattern, arrowStart, commitAnnotation,
       pushHistory, redrawPage, annotations, getAnnotation, updateAnnotation, selectedAnnId, stickyTool])
@@ -3271,27 +3297,36 @@ export default function PdfAnnotateTool() {
             }
             case 'stamp': {
               if (!ann.points.length || !ann.width || !ann.height) break
-              const sp = toPC({ x: ann.points[0].x + ann.width / 2, y: ann.points[0].y + ann.height / 2 })
-              const sr = parseInt((ann.color || '#000000').slice(1, 3), 16) / 255
-              const sg = parseInt((ann.color || '#000000').slice(3, 5), 16) / 255
-              const sb = parseInt((ann.color || '#000000').slice(5, 7), 16) / 255
-              const sc = rgb(sr, sg, sb)
-              const stampFont = await getFont(ann.fontFamily || 'Arial', true, false)
-              const stampLabel = ann.stampType || 'STAMP'
-              const stampFs = Math.min(ann.height * 0.42, 18)
-              const tw = stampFont.widthOfTextAtSize(stampLabel, stampFs)
               const stampPt = toPC(ann.points[0])
               const stampTr = toPC({ x: ann.points[0].x + ann.width, y: ann.points[0].y })
               const stampW = Math.abs(stampTr.x - stampPt.x)
               const stampH = ann.height
+              const stampX = Math.min(stampPt.x, stampTr.x)
+              const stampY = stampPt.y - stampH
+              // Background fill
+              if (ann.backgroundColor) {
+                const bgr = parseInt(ann.backgroundColor.slice(1, 3), 16) / 255
+                const bgg = parseInt(ann.backgroundColor.slice(3, 5), 16) / 255
+                const bgb = parseInt(ann.backgroundColor.slice(5, 7), 16) / 255
+                page.drawRectangle({
+                  x: stampX, y: stampY, width: stampW, height: stampH,
+                  color: rgb(bgr, bgg, bgb), opacity: ann.opacity,
+                })
+              }
+              // Border
               page.drawRectangle({
-                x: Math.min(stampPt.x, stampTr.x), y: stampPt.y - stampH,
-                width: stampW, height: stampH,
-                borderColor: sc, borderWidth: 1.5, opacity: ann.opacity,
+                x: stampX, y: stampY, width: stampW, height: stampH,
+                borderColor: c, borderWidth: 1.5, opacity: ann.opacity,
               })
+              // Text
+              const stampFont = await getFont(ann.fontFamily || 'Arial', true, false)
+              const stampLabel = ann.stampType || 'STAMP'
+              const stampFs = Math.min(ann.height * 0.42, 18)
+              const tw = stampFont.widthOfTextAtSize(stampLabel, stampFs)
+              const sp = toPC({ x: ann.points[0].x + ann.width / 2, y: ann.points[0].y + ann.height / 2 })
               page.drawText(stampLabel, {
                 x: sp.x - tw / 2, y: sp.y - stampFs / 2,
-                size: stampFs, font: stampFont, color: sc, opacity: ann.opacity,
+                size: stampFs, font: stampFont, color: c, opacity: ann.opacity,
               })
               break
             }
@@ -3509,7 +3544,7 @@ export default function PdfAnnotateTool() {
   const showPropsForSelection = activeTool === 'select' && selectedAnn
   const showTextProps = (isTextAnnSelected && activeTool === 'select') || activeTool === 'text' || activeTool === 'callout'
   const showStrokeWidth = (isShapeAnnSelected && activeTool === 'select') ||
-    (activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough')
+    (activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'stamp' && activeTool !== 'crop')
   const showOpacity = showPropsForTool || (activeTool === 'select' && selectedAnn != null)
   const showColorPicker = showPropsForTool || showPropsForSelection
   const showEraserControls = activeTool === 'eraser'
@@ -3600,10 +3635,18 @@ export default function PdfAnnotateTool() {
           <Search size={14} />
         </button>
 
-        {/* Annotation list button */}
+        {/* Annotation list button with count badge */}
         <button onClick={() => setAnnListOpen(o => !o)} title="Annotation list"
-          className={`p-1 rounded-lg transition-colors ${annListOpen ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'}`}>
+          className={`relative p-1 rounded-lg transition-colors ${annListOpen ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'}`}>
           <List size={14} />
+          {(() => {
+            const total = Object.values(annotations).reduce((s, a) => s + a.length, 0)
+            return total > 0 ? (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] bg-[#F47B20] rounded-full text-[8px] text-white font-bold flex items-center justify-center px-0.5">
+                {total > 99 ? '99+' : total}
+              </span>
+            ) : null
+          })()}
         </button>
 
         {/* Export & Reset */}
@@ -4025,6 +4068,25 @@ export default function PdfAnnotateTool() {
           </>
         )}
 
+        {/* Stamp controls */}
+        {activeTool === 'stamp' && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {STAMP_PRESETS.map(preset => (
+              <button
+                key={preset.label}
+                onClick={() => setActiveStampPreset(preset)}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors border ${
+                  activeStampPreset.label === preset.label
+                    ? 'border-current ring-1 ring-inset ring-current'
+                    : 'border-white/[0.1] text-white/40 hover:border-white/30 hover:text-white/70'
+                }`}
+                style={activeStampPreset.label === preset.label ? { color: preset.color, borderColor: preset.color } : {}}>
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Crop controls */}
         {showCropControls && (
           <>
@@ -4117,7 +4179,11 @@ export default function PdfAnnotateTool() {
                       const ann = findAnnotationAt(pt, pageNum)
                       if (!ann) return
                       setSelectedAnnId(ann.id)
-                      setContextMenu({ x: e.clientX, y: e.clientY, annId: ann.id, pageNum })
+                      // Clamp to viewport so menu doesn't go off-screen
+                      const menuW = 168, menuH = 200
+                      const cx = Math.min(e.clientX, window.innerWidth - menuW - 8)
+                      const cy = Math.min(e.clientY, window.innerHeight - menuH - 8)
+                      setContextMenu({ x: cx, y: cy, annId: ann.id, pageNum })
                     }}
                     onMouseLeave={() => { if (activeTool === 'eraser') setEraserCursorPos(null) }}
                   />
@@ -4546,13 +4612,15 @@ export default function PdfAnnotateTool() {
             <span>· {(measurements[currentPage] || []).length} meas</span>
           )}
           <span className="truncate">· {
-            selectedAnnId ? 'Arrows nudge · Del delete' :
-            activeTool === 'select' ? 'Click to select' :
+            selectedAnnId ? 'Arrows nudge · Del delete · Right-click menu' :
+            activeTool === 'select' ? 'Click to select · Ctrl+A all' :
             activeTool === 'text' ? 'Drag to create text' :
             activeTool === 'callout' ? 'Drag to create callout' :
             activeTool === 'cloud' ? `${currentPtsRef.current.length} pts · Dbl-click close` :
             activeTool === 'measure' ? 'Click two points' :
             activeTool === 'textHighlight' ? 'Drag to highlight' :
+            activeTool === 'stamp' ? `${activeStampPreset.label} · click to place` :
+            activeTool === 'crop' ? 'Drag to set crop region' :
             (activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'line' || activeTool === 'arrow')
               ? 'Shift for perfect shapes' :
             'Ctrl+scroll zoom'
@@ -4652,7 +4720,7 @@ export default function PdfAnnotateTool() {
         return (
           <div
             className="fixed z-50 pointer-events-none bg-[#001a24] border border-white/10 text-xs text-white/70 px-2 py-1 rounded shadow-lg"
-            style={{ left: hoverPosRef.current.x + 14, top: hoverPosRef.current.y - 28 }}
+            style={{ left: hoverPos.x + 14, top: hoverPos.y - 28 }}
           >
             {label}{opacityNote}
           </div>
@@ -4736,10 +4804,12 @@ export default function PdfAnnotateTool() {
                         onClick={() => {
                           navigateToPage(Number(pageStr))
                           setSelectedAnnId(ann.id)
+                          setActiveTool('select')
                         }}
-                        className={`w-full text-left px-3 py-1 text-xs truncate hover:bg-white/[0.06] transition-colors ${selectedAnnId === ann.id ? 'text-[#F47B20]' : 'text-white/60'}`}
+                        className={`w-full text-left px-3 py-1 text-xs truncate hover:bg-white/[0.06] transition-colors flex items-center gap-1.5 ${selectedAnnId === ann.id ? 'text-[#F47B20]' : 'text-white/60'}`}
                       >
-                        {annLabel(ann)}
+                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: ann.color }} />
+                        <span className="truncate">{annLabel(ann)}</span>
                       </button>
                     ))}
                   </div>
