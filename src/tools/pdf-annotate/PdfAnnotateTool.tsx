@@ -144,6 +144,8 @@ export default function PdfAnnotateTool() {
   } | null>(null)
   const clipboardRef = useRef<Annotation | null>(null)
   const [hoveredAnnId, setHoveredAnnId] = useState<string | null>(null)
+  // Ref mirrors hoveredAnnId for use inside pointermove — avoids re-render when value is unchanged
+  const hoveredAnnIdRef = useRef<string | null>(null)
 
   // Feature: sticky tool, hover tooltip, context menu, annotation list, find, stamp, crop, page input
   const [stickyTool, setStickyTool] = useState(false)
@@ -1786,6 +1788,12 @@ export default function PdfAnnotateTool() {
       const cacheKey = `${pageNum}_${rotation}`
       if (textItemsCacheRef.current[cacheKey]) continue
       extractPositionedText(pdfFile, pageNum, rotation).then(result => {
+        // Evict oldest entries if cache grows beyond 200 (safety cap for large multi-rotation PDFs)
+        const keys = Object.keys(textItemsCacheRef.current)
+        if (keys.length >= 200) {
+          const toDelete = keys.slice(0, 50)
+          for (const k of toDelete) delete textItemsCacheRef.current[k]
+        }
         textItemsCacheRef.current[cacheKey] = result.items
         if (findOpen) setFindCacheTick(t => t + 1)
       }).catch(() => {})
@@ -2405,7 +2413,12 @@ export default function PdfAnnotateTool() {
       }
       // 2. Check if hovering over any annotation
       const hoveredAnn = findAnnotationAt(hoverPt, pageNum)
-      setHoveredAnnId(hoveredAnn?.id ?? null)
+      // Only setState when value changes — avoids full re-render on every mouse move
+      const newHoveredId = hoveredAnn?.id ?? null
+      if (newHoveredId !== hoveredAnnIdRef.current) {
+        hoveredAnnIdRef.current = newHoveredId
+        setHoveredAnnId(newHoveredId)
+      }
       if (hoveredAnn) {
         // Show I-beam for text/callout annotations, move for everything else
         setCanvasCursor((hoveredAnn.type === 'text' || hoveredAnn.type === 'callout') ? 'grab' : 'move')
