@@ -124,13 +124,18 @@ export async function generateThumbnail(
   const viewport = page.getViewport({ scale })
 
   const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d', { alpha: false })
   if (!ctx) throw new Error('Failed to get canvas context')
 
   canvas.width = Math.floor(viewport.width)
   canvas.height = Math.floor(viewport.height)
 
-  await page.render({ canvasContext: ctx, viewport }).promise
+  await page.render({
+    canvasContext: ctx,
+    viewport,
+    intent: 'print',
+    annotationMode: pdfjsLib.AnnotationMode.DISABLE,
+  }).promise
   const dataUrl = canvas.toDataURL('image/png')
 
   page.cleanup()
@@ -180,13 +185,25 @@ export async function renderPageToCanvas(
   const page = await doc.getPage(pageNumber)
   const viewport = page.getViewport({ scale, rotation })
 
-  const ctx = canvas.getContext('2d')
+  // alpha: false — canvas has a white background; disabling alpha compositing
+  // gives sharper text rendering and eliminates premultiplied-alpha artifacts.
+  const ctx = canvas.getContext('2d', { alpha: false })
   if (!ctx) throw new Error('Failed to get canvas context')
 
   canvas.width = Math.floor(viewport.width)
   canvas.height = Math.floor(viewport.height)
 
-  await page.render({ canvasContext: ctx, viewport }).promise
+  await page.render({
+    canvasContext: ctx,
+    viewport,
+    // 'print' intent renders at full fidelity (no display-specific shortcuts),
+    // producing sharper text edges and more accurate colors.
+    intent: 'print',
+    // Disable PDF-native annotations — our own annotation layer handles everything.
+    // Without this, native PDF stamps/comments render on the same canvas and
+    // conflict with our annotation system.
+    annotationMode: pdfjsLib.AnnotationMode.DISABLE,
+  }).promise
   page.cleanup()
 }
 
