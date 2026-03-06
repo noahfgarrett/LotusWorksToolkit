@@ -1103,7 +1103,7 @@ export default function PdfAnnotateTool() {
     try {
       const rotation = pageRotationsRef.current[pageNum] || 0
       // Render at zoom-aware scale so the pixel buffer is always DPR-matched at the current zoom
-      const clampedZoom = Math.min(Math.max(zoomRef.current, 0.25), 3)
+      const clampedZoom = Math.min(Math.max(zoomRef.current, 0.25), 4)
       const rs = RENDER_SCALE * clampedZoom
       await renderPageToCanvas(pdfFile, pageNum, refs.pdfCanvas, rs, rotation)
       // Keep the CSS display size at the base (RENDER_SCALE) dimensions so the
@@ -1183,7 +1183,7 @@ export default function PdfAnnotateTool() {
   useEffect(() => {
     if (!pdfFile) return
     const timer = setTimeout(() => {
-      const clampedZoom = Math.min(Math.max(zoomRef.current, 0.25), 3)
+      const clampedZoom = Math.min(Math.max(zoomRef.current, 0.25), 4)
       const rs = RENDER_SCALE * clampedZoom
       // Only re-render pages whose stored scale differs enough from the new target
       const pagesToRerender: number[] = []
