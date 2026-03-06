@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react'
 import { FileDropZone } from '@/components/common/FileDropZone.tsx'
 import { Button } from '@/components/common/Button.tsx'
 import { Modal } from '@/components/common/Modal.tsx'
@@ -46,15 +46,15 @@ import FloatingToolbar from './FloatingToolbar.tsx'
 
 // ── Thumbnail sidebar item ──────────────────────────────
 
-function ThumbnailItem({ pageNum, thumbnail, isCurrent, isSelected, hasAnnotations, onVisible, onClick, onDoubleClick }: {
+const ThumbnailItem = memo(function ThumbnailItem({ pageNum, thumbnail, isCurrent, isSelected, hasAnnotations, onVisible, onClick, onDoubleClick }: {
   pageNum: number
   thumbnail?: string
   isCurrent: boolean
   isSelected: boolean
   hasAnnotations: boolean
-  onVisible: () => void
-  onClick: () => void
-  onDoubleClick: () => void
+  onVisible: (pageNum: number) => void
+  onClick: (pageNum: number) => void
+  onDoubleClick: (pageNum: number) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
@@ -63,7 +63,7 @@ function ThumbnailItem({ pageNum, thumbnail, isCurrent, isSelected, hasAnnotatio
     const el = ref.current
     if (!el) return
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) { onVisible(); observer.disconnect() } },
+      ([entry]) => { if (entry.isIntersecting) { onVisible(pageNum); observer.disconnect() } },
       { rootMargin: '200px' },
     )
     observer.observe(el)
@@ -74,8 +74,8 @@ function ThumbnailItem({ pageNum, thumbnail, isCurrent, isSelected, hasAnnotatio
   return (
     <div
       ref={ref}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
+      onClick={() => onClick(pageNum)}
+      onDoubleClick={() => onDoubleClick(pageNum)}
       className={`cursor-pointer rounded-md overflow-hidden border-2 transition-colors ${
         isCurrent ? 'border-[#F47B20]' :
         isSelected ? 'border-[#F47B20]/50' :
@@ -95,7 +95,7 @@ function ThumbnailItem({ pageNum, thumbnail, isCurrent, isSelected, hasAnnotatio
       </div>
     </div>
   )
-}
+})
 
 // ── Annotation label helper ────────────────────────────
 
@@ -182,7 +182,6 @@ export default function PdfAnnotateTool() {
   // Eraser
   const [eraserRadius, setEraserRadius] = useState(15)
   const [eraserMode, setEraserMode] = useState<'partial' | 'object'>('partial')
-  const [eraserCursorPos, setEraserCursorPos] = useState<Point | null>(null)
   const eraserModsRef = useRef<{ removed: Set<string>; added: Annotation[] }>({ removed: new Set(), added: [] })
   const canvasSnapshotRef = useRef<ImageData | null>(null)
 
@@ -259,7 +258,8 @@ export default function PdfAnnotateTool() {
   const stampDropdownRef = useRef<HTMLDivElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const hoverPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
-  const [hoverPos, setHoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const eraserCursorDivRef = useRef<HTMLDivElement>(null)
+  const tooltipDivRef = useRef<HTMLDivElement>(null)
   const cropDrawRef = useRef<{ startPt: Point } | null>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
   const isDrawingRef = useRef(false)
@@ -353,12 +353,18 @@ export default function PdfAnnotateTool() {
   }, [annotations])
 
   /** Find which page an annotation lives on (for overlays). */
-  const findAnnotationPage = useCallback((id: string): number | null => {
+  // O(1) annotation→page lookup (js-index-maps) — rebuilt only when annotations change
+  const annPageMap = useMemo(() => {
+    const map = new Map<string, number>()
     for (const [pageStr, pageAnns] of Object.entries(annotations)) {
-      if (pageAnns.some(a => a.id === id)) return Number(pageStr)
+      for (const ann of pageAnns) map.set(ann.id, Number(pageStr))
     }
-    return null
+    return map
   }, [annotations])
+
+  const findAnnotationPage = useCallback((id: string): number | null =>
+    annPageMap.get(id) ?? null
+  , [annPageMap])
 
   // ── Render helpers (page-aware) ────────────────────────
 
@@ -1099,6 +1105,10 @@ export default function PdfAnnotateTool() {
     }
   }, [pdfFile, redrawPage])
 
+  // Stable thumbnail callbacks — required for React.memo(ThumbnailItem) to skip re-renders
+  const handleThumbVisible = useCallback((pageNum: number) => { loadThumbnail(pageNum) }, [loadThumbnail])
+  const handleThumbClick = useCallback((pageNum: number) => { navigateToPage(pageNum) }, [navigateToPage])
+
   // Set up IntersectionObserver once dims are ready
   useEffect(() => {
     if (!pdfFile || pageDimsMap.current.size === 0) return
@@ -1677,7 +1687,7 @@ export default function PdfAnnotateTool() {
     measureStartRef.current = null
     measurePreviewRef.current = null
     setStraightLineMode(false)
-    setEraserCursorPos(null)
+    if (eraserCursorDivRef.current) eraserCursorDivRef.current.style.display = 'none'
     setSelectedAnnId(null)
     setSelectedArrowIdx(null)
     setSelectedMeasureId(null)
@@ -1696,60 +1706,27 @@ export default function PdfAnnotateTool() {
       // Commit any open text edit when switching away from text tools
       commitTextEditing()
     }
+    // Hide eraser cursor overlay when switching away from eraser tool
+    if (activeTool !== 'eraser' && eraserCursorDivRef.current) {
+      eraserCursorDivRef.current.style.display = 'none'
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTool])
 
-  // ── Close shapes dropdown on outside click ───────────
+  // ── Close dropdowns on outside click (single shared listener) ──
 
   useEffect(() => {
-    if (!shapesDropdownOpen) return
+    if (!shapesDropdownOpen && !textDropdownOpen && !zoomDropdownOpen && !stampDropdownOpen) return
     const handler = (e: PointerEvent) => {
-      if (shapesDropdownRef.current && !shapesDropdownRef.current.contains(e.target as Node)) {
-        setShapesDropdownOpen(false)
-      }
+      const t = e.target as Node
+      if (shapesDropdownOpen && shapesDropdownRef.current && !shapesDropdownRef.current.contains(t)) setShapesDropdownOpen(false)
+      if (textDropdownOpen && textDropdownRef.current && !textDropdownRef.current.contains(t)) setTextDropdownOpen(false)
+      if (zoomDropdownOpen && zoomDropdownRef.current && !zoomDropdownRef.current.contains(t)) setZoomDropdownOpen(false)
+      if (stampDropdownOpen && stampDropdownRef.current && !stampDropdownRef.current.contains(t)) setStampDropdownOpen(false)
     }
     document.addEventListener('pointerdown', handler)
     return () => document.removeEventListener('pointerdown', handler)
-  }, [shapesDropdownOpen])
-
-  // ── Close text dropdown on outside click ──────────────
-
-  useEffect(() => {
-    if (!textDropdownOpen) return
-    const handler = (e: PointerEvent) => {
-      if (textDropdownRef.current && !textDropdownRef.current.contains(e.target as Node)) {
-        setTextDropdownOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', handler)
-    return () => document.removeEventListener('pointerdown', handler)
-  }, [textDropdownOpen])
-
-  // ── Close zoom dropdown on outside click ──────────────
-
-  useEffect(() => {
-    if (!zoomDropdownOpen) return
-    const handler = (e: PointerEvent) => {
-      if (zoomDropdownRef.current && !zoomDropdownRef.current.contains(e.target as Node)) {
-        setZoomDropdownOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', handler)
-    return () => document.removeEventListener('pointerdown', handler)
-  }, [zoomDropdownOpen])
-
-  // ── Close stamp dropdown on outside click ─────────────
-
-  useEffect(() => {
-    if (!stampDropdownOpen) return
-    const handler = (e: PointerEvent) => {
-      if (stampDropdownRef.current && !stampDropdownRef.current.contains(e.target as Node)) {
-        setStampDropdownOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', handler)
-    return () => document.removeEventListener('pointerdown', handler)
-  }, [stampDropdownOpen])
+  }, [shapesDropdownOpen, textDropdownOpen, zoomDropdownOpen, stampDropdownOpen])
 
   // ── Cache text items for text highlight and find ───────────────
 
@@ -2295,9 +2272,12 @@ export default function PdfAnnotateTool() {
       activeStampPreset, stickyTool])
 
   const handlePointerMove = useCallback((e: React.PointerEvent, pageNum: number) => {
-    // Track cursor position for hover tooltip (state so tooltip renders at correct pos)
+    // Track cursor position for hover tooltip — update DOM directly to avoid re-renders on every move
     hoverPosRef.current = { x: e.clientX, y: e.clientY }
-    setHoverPos({ x: e.clientX, y: e.clientY })
+    if (tooltipDivRef.current) {
+      tooltipDivRef.current.style.left = `${e.clientX + 14}px`
+      tooltipDivRef.current.style.top = `${e.clientY - 28}px`
+    }
     // Space-to-pan: scroll viewport
     if (spaceHeldRef.current && panRef.current) {
       const el = scrollRef.current
@@ -2309,13 +2289,15 @@ export default function PdfAnnotateTool() {
     }
     // Use active page for drawing operations (pointer capture keeps events on starting page)
     const ap = activePageRef.current
-    // Eraser cursor
-    if (activeTool === 'eraser') {
-      const annCanvas = pageRefsMap.current.get(pageNum)?.annCanvas
-      if (annCanvas) {
-        const rect = annCanvas.getBoundingClientRect()
-        setEraserCursorPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
-      }
+    // Eraser cursor — update fixed overlay div directly to avoid state re-renders
+    if (activeTool === 'eraser' && eraserCursorDivRef.current) {
+      const size = eraserRadius * 2
+      const style = eraserCursorDivRef.current.style
+      style.display = 'block'
+      style.left = `${e.clientX - eraserRadius}px`
+      style.top = `${e.clientY - eraserRadius}px`
+      style.width = `${size}px`
+      style.height = `${size}px`
     }
 
     // Measure tool: track cursor for preview line
@@ -3559,6 +3541,11 @@ export default function PdfAnnotateTool() {
   const editingAnn = editingTextId ? getAnnotation(editingTextId) : null
   const selectedAnn = selectedAnnId ? getAnnotation(selectedAnnId) : null
   const isTextAnnSelected = selectedAnn && (selectedAnn.type === 'text' || selectedAnn.type === 'callout')
+  // Memoize total annotation count so badge doesn't recompute on every render
+  const totalAnnotationCount = useMemo(() =>
+    Object.values(annotations).reduce((s, a) => s + a.length, 0)
+  , [annotations])
+
   const isShapeAnnSelected = selectedAnn && !isTextAnnSelected
 
   // Properties bar context
@@ -3661,14 +3648,11 @@ export default function PdfAnnotateTool() {
         <button onClick={() => setAnnListOpen(o => !o)} title="Annotation list"
           className={`relative p-1 rounded-lg transition-colors ${annListOpen ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'}`}>
           <List size={14} />
-          {(() => {
-            const total = Object.values(annotations).reduce((s, a) => s + a.length, 0)
-            return total > 0 ? (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] bg-[#F47B20] rounded-full text-[8px] text-white font-bold flex items-center justify-center px-0.5">
-                {total > 99 ? '99+' : total}
-              </span>
-            ) : null
-          })()}
+          {totalAnnotationCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] bg-[#F47B20] rounded-full text-[8px] text-white font-bold flex items-center justify-center px-0.5">
+              {totalAnnotationCount > 99 ? '99+' : totalAnnotationCount}
+            </span>
+          )}
         </button>
 
         {/* Export & Reset */}
@@ -4164,9 +4148,9 @@ export default function PdfAnnotateTool() {
                   isCurrent={pageNum === currentPage}
                   isSelected={pageNum === selectedThumbPage}
                   hasAnnotations={(annotations[pageNum] || []).length > 0}
-                  onVisible={() => loadThumbnail(pageNum)}
-                  onClick={() => navigateToPage(pageNum)}
-                  onDoubleClick={() => navigateToPage(pageNum)}
+                  onVisible={handleThumbVisible}
+                  onClick={handleThumbClick}
+                  onDoubleClick={handleThumbClick}
                 />
               ))}
             </div>
@@ -4225,20 +4209,9 @@ export default function PdfAnnotateTool() {
                       const cy = Math.min(e.clientY, window.innerHeight - menuH - 8)
                       setContextMenu({ x: cx, y: cy, annId: ann.id, pageNum })
                     }}
-                    onMouseLeave={() => { if (activeTool === 'eraser') setEraserCursorPos(null) }}
+                    onMouseLeave={() => { if (activeTool === 'eraser') if (eraserCursorDivRef.current) eraserCursorDivRef.current.style.display = 'none' }}
                   />
-                  {/* Eraser circle cursor on this page */}
-                  {activeTool === 'eraser' && eraserCursorPos && activePageRef.current === pageNum && (
-                    <div
-                      className="pointer-events-none absolute border-2 border-white/60 rounded-full mix-blend-difference"
-                      style={{
-                        left: (eraserCursorPos.x - eraserRadius) / zoom,
-                        top: (eraserCursorPos.y - eraserRadius) / zoom,
-                        width: eraserRadius * 2 / zoom,
-                        height: eraserRadius * 2 / zoom,
-                      }}
-                    />
-                  )}
+                  {/* Eraser circle cursor rendered as fixed overlay at root level */}
                   {/* Floating text editor on this page */}
                   {editingOnThisPage && editingAnn && editingAnn.width && editingAnn.height && (
                     <textarea
@@ -4751,18 +4724,26 @@ export default function PdfAnnotateTool() {
         })()}
       </Modal>
 
-      {/* ── Hover Tooltip ── */}
+      {/* ── Eraser cursor overlay — positioned via ref to avoid re-renders on mousemove ── */}
+      <div
+        ref={eraserCursorDivRef}
+        className="pointer-events-none fixed border-2 border-white/60 rounded-full mix-blend-difference z-40"
+        style={{ display: 'none' }}
+      />
+
+      {/* ── Hover Tooltip — position updated via ref to avoid re-renders on mousemove ── */}
       {hoveredAnnId && !editingTextId && activeTool === 'select' && (() => {
-        const ann = findAnnotationPage(hoveredAnnId) !== null
-          ? (annotations[findAnnotationPage(hoveredAnnId)!] || []).find(a => a.id === hoveredAnnId)
+        const ann = annPageMap.get(hoveredAnnId) !== undefined
+          ? (annotations[annPageMap.get(hoveredAnnId)!] || []).find(a => a.id === hoveredAnnId)
           : null
         if (!ann) return null
         const label = annLabel(ann)
         const opacityNote = ann.opacity < 1 ? ` · ${Math.round(ann.opacity * 100)}%` : ''
         return (
           <div
+            ref={tooltipDivRef}
             className="fixed z-50 pointer-events-none bg-[#001a24] border border-white/10 text-xs text-white/70 px-2 py-1 rounded shadow-lg"
-            style={{ left: hoverPos.x + 14, top: hoverPos.y - 28 }}
+            style={{ left: hoverPosRef.current.x + 14, top: hoverPosRef.current.y - 28 }}
           >
             {label}{opacityNote}
           </div>
