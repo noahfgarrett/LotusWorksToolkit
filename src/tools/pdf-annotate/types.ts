@@ -153,6 +153,15 @@ export const HANDLE_CURSOR_MAP: Record<string, string> = {
 
 export function genId() { return crypto.randomUUID() }
 
+/** Parse a hex color string (#RRGGBB) to pdf-lib-compatible {r,g,b} (0-1 range) */
+export function parseHexColor(hex: string): { r: number; g: number; b: number } {
+  return {
+    r: parseInt(hex.slice(1, 3), 16) / 255,
+    g: parseInt(hex.slice(3, 5), 16) / 255,
+    b: parseInt(hex.slice(5, 7), 16) / 255,
+  }
+}
+
 // ── PDF font resolution ─────────────────────────────
 
 export function resolvePdfFontFamily(ff: string): string {

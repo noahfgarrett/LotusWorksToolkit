@@ -28,7 +28,7 @@ import {
   ANN_COLORS, HIGHLIGHT_COLORS, ZOOM_PRESETS, STAMP_PRESETS,
   DRAW_TOOLS, TEXT_TOOLS, DRAW_TYPES, TEXT_TYPES,
   FONT_FAMILIES, PDF_FONT_MAP, CURSOR_MAP, HANDLE_CURSOR_MAP,
-  genId, resolvePdfFont, saveWithPicker, toPdfCoords,
+  genId, resolvePdfFont, saveWithPicker, toPdfCoords, parseHexColor,
 } from './types.ts'
 import {
   wrapText, computeTextBoxHeight, nearestPointOnRect, hitTestCalloutBox,
@@ -204,6 +204,7 @@ export default function PdfAnnotateTool() {
   // (unlike mousedown), so we must track click timestamps ourselves.
   const dblClickRef = useRef<{ time: number; pt: Point }>({ time: 0, pt: { x: 0, y: 0 } })
   const textDragRef = useRef<{
+    annId: string
     mode: 'move' | HandleId
     startPt: Point
     origPoints: Point[]
@@ -1934,7 +1935,7 @@ export default function PdfAnnotateTool() {
           if (handle) {
             isDrawingRef.current = true
             textDragRef.current = {
-              mode: handle, startPt: pt,
+              annId: ann.id, mode: handle, startPt: pt,
               origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
               origArrows: ann.arrows ? [...ann.arrows] : undefined,
             }
@@ -1948,7 +1949,7 @@ export default function PdfAnnotateTool() {
             } else {
               isDrawingRef.current = true
               textDragRef.current = {
-                mode: 'move', startPt: pt,
+                annId: ann.id, mode: 'move', startPt: pt,
                 origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
                 origArrows: ann.arrows ? [...ann.arrows] : undefined,
               }
@@ -1992,7 +1993,7 @@ export default function PdfAnnotateTool() {
           } else if (hitAnn.width && hitAnn.height) {
             isDrawingRef.current = true
             textDragRef.current = {
-              mode: 'move', startPt: pt,
+              annId: hitAnn.id, mode: 'move', startPt: pt,
               origPoints: [...hitAnn.points], origWidth: hitAnn.width, origHeight: hitAnn.height,
               origArrows: hitAnn.arrows ? [...hitAnn.arrows] : undefined,
             }
@@ -2098,7 +2099,7 @@ export default function PdfAnnotateTool() {
           if (handle) {
             isDrawingRef.current = true
             textDragRef.current = {
-              mode: handle, startPt: pt,
+              annId: ann.id, mode: handle, startPt: pt,
               origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
             }
             return
@@ -2111,7 +2112,7 @@ export default function PdfAnnotateTool() {
             } else {
               isDrawingRef.current = true
               textDragRef.current = {
-                mode: 'move', startPt: pt,
+                annId: ann.id, mode: 'move', startPt: pt,
                 origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
                 origArrows: ann.arrows ? [...ann.arrows] : undefined,
               }
@@ -2170,7 +2171,7 @@ export default function PdfAnnotateTool() {
         commitTextEditing()
       }
 
-      // Check if clicking a resize handle on selected annotation
+      // Check if clicking a resize handle or body on selected annotation
       if (selectedAnnId) {
         const ann = getAnnotation(selectedAnnId)
         if (ann && ann.type === 'text' && ann.width && ann.height) {
@@ -2179,6 +2180,7 @@ export default function PdfAnnotateTool() {
           if (handle) {
             isDrawingRef.current = true
             textDragRef.current = {
+              annId: ann.id,
               mode: handle,
               startPt: pt,
               origPoints: [...ann.points],
@@ -2187,10 +2189,23 @@ export default function PdfAnnotateTool() {
             }
             return
           }
+          // Click inside text body: single-click moves, double-click edits
+          if (hitTest(pt, ann, 4 / zoom)) {
+            if (isDoubleClick) {
+              enterEditMode(ann.id)
+            } else {
+              isDrawingRef.current = true
+              textDragRef.current = {
+                annId: ann.id, mode: 'move', startPt: pt,
+                origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
+              }
+            }
+            return
+          }
         }
       }
 
-      // Check if clicking on any text annotation → single-click edits (text tool is active)
+      // Check if clicking on any text annotation → single-click enters edit mode (different box)
       const hitAnn = findTextAnnotationAt(pt)
       if (hitAnn) {
         setSelectedAnnId(hitAnn.id)
@@ -2472,7 +2487,7 @@ export default function PdfAnnotateTool() {
         setAnnotations(prev => ({
           ...prev,
           [ap]: (prev[ap] || []).map(a =>
-            a.id === selectedAnnId ? { ...a, points: [{ x: drag.origPoints[0].x + dx, y: drag.origPoints[0].y + dy }], ...(movedArrows ? { arrows: movedArrows } : {}) } : a
+            a.id === drag.annId ? { ...a, points: [{ x: drag.origPoints[0].x + dx, y: drag.origPoints[0].y + dy }], ...(movedArrows ? { arrows: movedArrows } : {}) } : a
           ),
         }))
       } else {
@@ -2490,16 +2505,14 @@ export default function PdfAnnotateTool() {
           case 'w': newX = origPoints[0].x + dx; newW = Math.max(40, origWidth - dx); break
         }
         // Auto-height for text/callout: recompute height based on content reflow
-        if (selectedAnnId) {
-          const ann = (annotations[ap] || []).find(a => a.id === selectedAnnId)
-          if (ann && (ann.type === 'text' || ann.type === 'callout') && ann.text) {
-            newH = computeTextBoxHeight({ ...ann, width: newW }, DEFAULT_TEXTBOX_H)
-          }
+        const annForHeight = (annotations[ap] || []).find(a => a.id === drag.annId)
+        if (annForHeight && (annForHeight.type === 'text' || annForHeight.type === 'callout') && annForHeight.text) {
+          newH = computeTextBoxHeight({ ...annForHeight, width: newW }, DEFAULT_TEXTBOX_H)
         }
         setAnnotations(prev => ({
           ...prev,
           [ap]: (prev[ap] || []).map(a =>
-            a.id === selectedAnnId ? { ...a, points: [{ x: newX, y: newY }], width: newW, height: newH } : a
+            a.id === drag.annId ? { ...a, points: [{ x: newX, y: newY }], width: newW, height: newH } : a
           ),
         }))
       }
@@ -2550,7 +2563,7 @@ export default function PdfAnnotateTool() {
           setAnnotations(prev => ({
             ...prev,
             [ap]: (prev[ap] || []).map(a =>
-              a.id === selectedAnnId ? { ...a, points: [{ x: drag.origPoints[0].x + dx, y: drag.origPoints[0].y + dy }], ...(movedArrows ? { arrows: movedArrows } : {}) } : a
+              a.id === drag.annId ? { ...a, points: [{ x: drag.origPoints[0].x + dx, y: drag.origPoints[0].y + dy }], ...(movedArrows ? { arrows: movedArrows } : {}) } : a
             ),
           }))
         } else {
@@ -2570,7 +2583,7 @@ export default function PdfAnnotateTool() {
           setAnnotations(prev => ({
             ...prev,
             [ap]: (prev[ap] || []).map(a =>
-              a.id === selectedAnnId ? { ...a, points: [{ x: newX, y: newY }], width: newW, height: newH } : a
+              a.id === drag.annId ? { ...a, points: [{ x: newX, y: newY }], width: newW, height: newH } : a
             ),
           }))
         }
@@ -2594,7 +2607,7 @@ export default function PdfAnnotateTool() {
         setAnnotations(prev => ({
           ...prev,
           [ap]: (prev[ap] || []).map(a =>
-            a.id === selectedAnnId ? { ...a, points: [{ x: newX, y: newY }] } : a
+            a.id === drag.annId ? { ...a, points: [{ x: newX, y: newY }] } : a
           ),
         }))
       } else {
@@ -2613,17 +2626,15 @@ export default function PdfAnnotateTool() {
           case 'w': newX = origPoints[0].x + dx; newW = Math.max(40, origWidth - dx); break
         }
         // Auto-height for text annotations
-        if (selectedAnnId) {
-          const ann = (annotations[ap] || []).find(a => a.id === selectedAnnId)
-          if (ann && ann.type === 'text' && ann.text) {
-            newH = computeTextBoxHeight({ ...ann, width: newW }, DEFAULT_TEXTBOX_H)
-          }
+        const annForHeight = (annotations[ap] || []).find(a => a.id === drag.annId)
+        if (annForHeight && annForHeight.type === 'text' && annForHeight.text) {
+          newH = computeTextBoxHeight({ ...annForHeight, width: newW }, DEFAULT_TEXTBOX_H)
         }
 
         setAnnotations(prev => ({
           ...prev,
           [ap]: (prev[ap] || []).map(a =>
-            a.id === selectedAnnId ? { ...a, points: [{ x: newX, y: newY }], width: newW, height: newH } : a
+            a.id === drag.annId ? { ...a, points: [{ x: newX, y: newY }], width: newW, height: newH } : a
           ),
         }))
       }
@@ -2818,7 +2829,7 @@ export default function PdfAnnotateTool() {
         return
       }
       if (textDragRef.current) {
-        const ann = getAnnotation(selectedAnnId!)
+        const ann = getAnnotation(textDragRef.current.annId)
         if (ann) pushHistory(structuredClone(annotations))
         textDragRef.current = null
         return
@@ -2857,7 +2868,7 @@ export default function PdfAnnotateTool() {
     // Text tool: finish move/resize or create textbox
     if (activeTool === 'text') {
       if (textDragRef.current) {
-        const ann = getAnnotation(selectedAnnId!)
+        const ann = getAnnotation(textDragRef.current.annId)
         if (ann) {
           pushHistory(structuredClone(annotations))
         }
@@ -3021,9 +3032,7 @@ export default function PdfAnnotateTool() {
         }
 
         for (const ann of pageAnns) {
-          const r = parseInt(ann.color.slice(1, 3), 16) / 255
-          const g = parseInt(ann.color.slice(3, 5), 16) / 255
-          const bv = parseInt(ann.color.slice(5, 7), 16) / 255
+          const { r, g, b: bv } = parseHexColor(ann.color)
           const c = rgb(r, g, bv)
 
           // Transform points to PDF coordinates
@@ -3138,34 +3147,48 @@ export default function PdfAnnotateTool() {
             }
             case 'rectangle': {
               if (ann.points.length < 2) break
-              const tl = toPC({ x: Math.min(ann.points[0].x, ann.points[1].x), y: Math.max(ann.points[0].y, ann.points[1].y) })
               const rw = Math.abs(ann.points[1].x - ann.points[0].x)
               const rh = Math.abs(ann.points[1].y - ann.points[0].y)
-              const rectOpts: Record<string, unknown> = {
-                x: tl.x, y: tl.y, width: rw, height: rh,
-                borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
-              }
+              const cr = ann.cornerRadius || 0
+              const dashArr = ann.dashPattern === 'dashed' ? [ann.strokeWidth * 3, ann.strokeWidth * 2]
+                : ann.dashPattern === 'dotted' ? [ann.strokeWidth, ann.strokeWidth * 2] : undefined
+
+              // Compute fill color once
+              let rectFillRgb: ReturnType<typeof rgb> | undefined
               if (ann.fillColor) {
-                const fc = ann.fillColor
-                const fr = parseInt(fc.slice(1, 3), 16) / 255
-                const fg = parseInt(fc.slice(3, 5), 16) / 255
-                const fb = parseInt(fc.slice(5, 7), 16) / 255
-                rectOpts.color = rgb(fr, fg, fb)
-                rectOpts.opacity = ann.opacity
+                const { r: fr, g: fg, b: fb } = parseHexColor(ann.fillColor)
+                rectFillRgb = rgb(fr, fg, fb)
               }
-              if (ann.dashPattern === 'dashed') rectOpts.borderDashArray = [ann.strokeWidth * 3, ann.strokeWidth * 2]
-              else if (ann.dashPattern === 'dotted') rectOpts.borderDashArray = [ann.strokeWidth, ann.strokeWidth * 2]
-              page.drawRectangle(rectOpts as Parameters<typeof page.drawRectangle>[0])
+
+              if (cr > 0) {
+                // Rounded rectangle via SVG path (pdf-lib drawRectangle has no borderRadius)
+                const tl = toPC({ x: Math.min(ann.points[0].x, ann.points[1].x), y: Math.min(ann.points[0].y, ann.points[1].y) })
+                const clamped = Math.min(cr, rw / 2, rh / 2)
+                const svgRRect = `M ${clamped} 0 L ${rw - clamped} 0 Q ${rw} 0 ${rw} ${-clamped} L ${rw} ${-(rh - clamped)} Q ${rw} ${-rh} ${rw - clamped} ${-rh} L ${clamped} ${-rh} Q 0 ${-rh} 0 ${-(rh - clamped)} L 0 ${-clamped} Q 0 0 ${clamped} 0 Z`
+                const pathOpts: Record<string, unknown> = {
+                  x: tl.x, y: tl.y,
+                  borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
+                }
+                if (rectFillRgb) { pathOpts.color = rectFillRgb; pathOpts.opacity = ann.opacity }
+                if (dashArr) pathOpts.borderDashArray = dashArr
+                page.drawSvgPath(svgRRect, pathOpts as Parameters<typeof page.drawSvgPath>[1])
+              } else {
+                const tl = toPC({ x: Math.min(ann.points[0].x, ann.points[1].x), y: Math.max(ann.points[0].y, ann.points[1].y) })
+                const rectOpts: Record<string, unknown> = {
+                  x: tl.x, y: tl.y, width: rw, height: rh,
+                  borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
+                }
+                if (rectFillRgb) { rectOpts.color = rectFillRgb; rectOpts.opacity = ann.opacity }
+                if (dashArr) rectOpts.borderDashArray = dashArr
+                page.drawRectangle(rectOpts as Parameters<typeof page.drawRectangle>[0])
+              }
               break
             }
             case 'cloud': {
               if (ann.points.length < 3) break
               // Fill polygon if fillColor set
               if (ann.fillColor) {
-                const fc = ann.fillColor
-                const fr = parseInt(fc.slice(1, 3), 16) / 255
-                const fg = parseInt(fc.slice(3, 5), 16) / 255
-                const fb = parseInt(fc.slice(5, 7), 16) / 255
+                const { r: fr, g: fg, b: fb } = parseHexColor(ann.fillColor)
                 const first = toPC(ann.points[0])
                 let svgD = `M ${0} ${0}`
                 for (let pi = 1; pi < ann.points.length; pi++) {
@@ -3224,10 +3247,7 @@ export default function PdfAnnotateTool() {
                 borderWidth: ann.strokeWidth, borderColor: c, borderOpacity: ann.opacity,
               }
               if (ann.fillColor) {
-                const fc = ann.fillColor
-                const fr = parseInt(fc.slice(1, 3), 16) / 255
-                const fg = parseInt(fc.slice(3, 5), 16) / 255
-                const fb = parseInt(fc.slice(5, 7), 16) / 255
+                const { r: fr, g: fg, b: fb } = parseHexColor(ann.fillColor)
                 ellipseOpts.color = rgb(fr, fg, fb)
                 ellipseOpts.opacity = ann.opacity
               }
@@ -3238,6 +3258,16 @@ export default function PdfAnnotateTool() {
             }
             case 'text': {
               if (!ann.text || !ann.points.length) break
+              // Export text background color if set
+              if (ann.backgroundColor && ann.width && ann.height) {
+                const { r: tbr, g: tbg, b: tbb } = parseHexColor(ann.backgroundColor)
+                const bgBl = toPC({ x: ann.points[0].x, y: ann.points[0].y + ann.height })
+                page.drawRectangle({
+                  x: bgBl.x, y: bgBl.y,
+                  width: ann.width, height: ann.height,
+                  color: rgb(tbr, tbg, tbb), opacity: 0.3,
+                })
+              }
               const baseFsText = ann.fontSize || 16
               const fs = ann.superscript || ann.subscript ? baseFsText * 0.6 : baseFsText
               const yShift = ann.superscript ? -baseFsText * 0.4 : ann.subscript ? baseFsText * 0.2 : 0
@@ -3375,9 +3405,7 @@ export default function PdfAnnotateTool() {
               const stampY = stampPt.y - stampH
               // Background fill
               if (ann.backgroundColor) {
-                const bgr = parseInt(ann.backgroundColor.slice(1, 3), 16) / 255
-                const bgg = parseInt(ann.backgroundColor.slice(3, 5), 16) / 255
-                const bgb = parseInt(ann.backgroundColor.slice(5, 7), 16) / 255
+                const { r: bgr, g: bgg, b: bgb } = parseHexColor(ann.backgroundColor)
                 page.drawRectangle({
                   x: stampX, y: stampY, width: stampW, height: stampH,
                   color: rgb(bgr, bgg, bgb), opacity: ann.opacity,
@@ -3533,6 +3561,7 @@ export default function PdfAnnotateTool() {
     setSelectedMeasureId(null)
     measureStartRef.current = null
     measurePreviewRef.current = null
+    setCropRegions({})
   }, [])
 
   // ── Pre-render derived values (must be before any early return) ──
@@ -4260,7 +4289,7 @@ export default function PdfAnnotateTool() {
                     className="ann-canvas absolute top-0 left-0"
                     width={dims?.width ?? 0}
                     height={dims?.height ?? 0}
-                    style={{ mixBlendMode: 'multiply', cursor: canvasCursor || (activeTool === 'select' && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
+                    style={{ mixBlendMode: 'multiply', touchAction: 'none', cursor: canvasCursor || (activeTool === 'select' && selectedAnnId ? 'default' : CURSOR_MAP[activeTool]) }}
                     onPointerDown={e => handlePointerDown(e, pageNum)}
                     onPointerMove={e => handlePointerMove(e, pageNum)}
                     onPointerUp={handlePointerUp}
