@@ -294,7 +294,8 @@ test.describe('Multiple Arrows', () => {
   })
 
   test('consecutive arrow draws with sticky mode', async ({ page }) => {
-    await page.locator('button[title="Arrow (A)"]').dblclick()
+    await selectTool(page, 'Arrow (A)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 5; i++) {
       await dragOnCanvas(page, { x: 50, y: 50 + i * 50 }, { x: 250, y: 50 + i * 50 })
@@ -466,7 +467,14 @@ test.describe('Arrow Additional Edge Cases', () => {
     await createAnnotation(page, 'arrow', { x: 100, y: 200, w: 200, h: 0 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    await clickCanvasAt(page, 200, 200)
+    // Use a wide sweep that crosses the arrow's stroke path
+    await drawOnCanvas(page, [
+      { x: 150, y: 140 },
+      { x: 180, y: 170 },
+      { x: 200, y: 200 },
+      { x: 220, y: 230 },
+      { x: 250, y: 260 },
+    ])
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(0)
   })
@@ -475,7 +483,14 @@ test.describe('Arrow Additional Edge Cases', () => {
     await createAnnotation(page, 'arrow', { x: 100, y: 200, w: 200, h: 0 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    await clickCanvasAt(page, 200, 200)
+    // Use a wide sweep that crosses the arrow's stroke path
+    await drawOnCanvas(page, [
+      { x: 150, y: 140 },
+      { x: 180, y: 170 },
+      { x: 200, y: 200 },
+      { x: 220, y: 230 },
+      { x: 250, y: 260 },
+    ])
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(0)
     await page.keyboard.press('Control+z')

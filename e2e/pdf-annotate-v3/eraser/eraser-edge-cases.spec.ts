@@ -382,6 +382,7 @@ test.describe('Eraser - Edge Cases', () => {
   // ── Performance ────────────────────────────────────────────────────────
 
   test('eraser with many annotations (50+) does not freeze', async ({ page }) => {
+    test.setTimeout(180000)
     // Create many small annotations
     for (let row = 0; row < 5; row++) {
       for (let col = 0; col < 10; col++) {

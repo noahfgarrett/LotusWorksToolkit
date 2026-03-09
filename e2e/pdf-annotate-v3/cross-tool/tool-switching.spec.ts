@@ -197,12 +197,13 @@ test.describe('Cross-Tool: Tool Switching', () => {
 
   test('tool switch does not lose selection', async ({ page }) => {
     await createAnnotation(page, 'rectangle')
-    await selectAnnotationAt(page, 160, 140)
+    await selectAnnotationAt(page, 100, 140)
     // Switch to pencil and back to select
     await selectTool(page, 'Pencil (P)')
     await selectTool(page, 'Select (S)')
     // Clicking the same spot should still be able to select the annotation
-    await clickCanvasAt(page, 160, 140)
+    // Click on left edge of default rectangle (x=100)
+    await clickCanvasAt(page, 100, 140)
     await page.waitForTimeout(200)
     // Annotation should still be there
     expect(await getAnnotationCount(page)).toBe(1)
@@ -225,7 +226,8 @@ test.describe('Cross-Tool: Tool Switching', () => {
     await createAnnotation(page, 'rectangle', { x: 80, y: 80, w: 100, h: 60 })
     await createAnnotation(page, 'text', { x: 80, y: 180, w: 120, h: 40 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 130, 110)
+    // Click on left edge of rectangle at {x:80,y:80,w:100,h:60}
+    await clickCanvasAt(page, 80, 110)
     await page.waitForTimeout(200)
     // Should be able to select without crash
     expect(await getAnnotationCount(page)).toBe(2)
@@ -257,7 +259,7 @@ test.describe('Cross-Tool: Tool Switching', () => {
 
   test('switch to eraser while annotation is selected', async ({ page }) => {
     await createAnnotation(page, 'rectangle')
-    await selectAnnotationAt(page, 160, 140)
+    await selectAnnotationAt(page, 100, 140)
     await selectTool(page, 'Eraser (E)')
     // Selection should be cleared, eraser active
     await page.waitForTimeout(200)
@@ -461,7 +463,7 @@ test.describe('Cross-Tool: Tool Switching', () => {
 
   test('select annotation then switch to pencil clears selection handles', async ({ page }) => {
     await createAnnotation(page, 'rectangle')
-    await selectAnnotationAt(page, 160, 140)
+    await selectAnnotationAt(page, 100, 140)
     const beforeScreenshot = await screenshotCanvas(page)
     await selectTool(page, 'Pencil (P)')
     await page.waitForTimeout(200)

@@ -370,7 +370,8 @@ test.describe('Line Edge Cases', () => {
   })
 
   test('consecutive line draws with sticky mode', async ({ page }) => {
-    await page.locator('button[title="Line (L)"]').dblclick()
+    await selectTool(page, 'Line (L)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 5; i++) {
       await dragOnCanvas(page, { x: 50, y: 50 + i * 50 }, { x: 300, y: 50 + i * 50 })

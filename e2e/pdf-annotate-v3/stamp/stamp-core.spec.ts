@@ -379,13 +379,12 @@ test.describe('Stamp - Core', () => {
   // ── Consecutive placement ─────────────────────────────────────────────
 
   test('consecutive stamp placement with sticky tool', async ({ page }) => {
-    // Enable sticky tool by double-clicking the stamp tool button
+    // Enable sticky tool via Pin button, then activate stamp
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
+    await page.waitForTimeout(100)
     await page.keyboard.press('g')
     await page.waitForTimeout(200)
     await page.locator('button:has-text("APPROVED")').first().click()
-    await page.waitForTimeout(100)
-    // Double-click the stamp tool button to activate sticky mode
-    await page.locator('button[title="Stamp"]').dblclick()
     await page.waitForTimeout(200)
 
     await clickCanvasAt(page, 100, 150)
@@ -511,12 +510,12 @@ test.describe('Stamp - Core', () => {
   // ── Rapid placement ───────────────────────────────────────────────────
 
   test('rapid stamp placement (10+ stamps)', async ({ page }) => {
-    // Enable sticky tool by double-clicking the stamp tool button
+    // Enable sticky tool via Pin button, then activate stamp
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
+    await page.waitForTimeout(100)
     await page.keyboard.press('g')
     await page.waitForTimeout(200)
     await page.locator('button:has-text("APPROVED")').first().click()
-    await page.waitForTimeout(100)
-    await page.locator('button[title="Stamp"]').dblclick()
     await page.waitForTimeout(200)
 
     for (let i = 0; i < 10; i++) {

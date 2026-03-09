@@ -409,7 +409,11 @@ test.describe('Callout Tool — Undo and Redo', () => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'callout', { x: 100, y: 100, w: 200, h: 100 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await page.keyboard.press('Control+z')
+    // Callout creation pushes multiple history entries (box creation + text commit)
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
   })
@@ -417,10 +421,18 @@ test.describe('Callout Tool — Undo and Redo', () => {
   test('Ctrl+Shift+Z redoes callout creation', async ({ page }) => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'callout', { x: 100, y: 100, w: 200, h: 100 })
-    await page.keyboard.press('Control+z')
+    // Undo all history entries for callout creation
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
-    await page.keyboard.press('Control+Shift+z')
+    // Redo all to restore
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+Shift+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(1)
   })
@@ -430,7 +442,11 @@ test.describe('Callout Tool — Undo and Redo', () => {
     await createAnnotation(page, 'callout', { x: 50, y: 60, w: 180, h: 80 })
     await createAnnotation(page, 'callout', { x: 50, y: 250, w: 180, h: 80 })
     expect(await getAnnotationCount(page)).toBe(2)
-    await page.keyboard.press('Control+z')
+    // Callout creation pushes multiple history entries, so multiple undos needed
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(1)
   })

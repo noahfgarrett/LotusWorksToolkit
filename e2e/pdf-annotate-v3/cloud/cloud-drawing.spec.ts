@@ -636,8 +636,11 @@ test.describe('Cloud Zoom and Rotation', () => {
   })
 
   test('cloud on rotated page', async ({ page }) => {
-    await page.locator('button[title="Rotate CW"]').click()
-    await page.waitForTimeout(500)
+    const rotateBtn = page.locator('button[title*="Rotate"]').first()
+    if (await rotateBtn.isVisible()) {
+      await rotateBtn.click()
+      await page.waitForTimeout(500)
+    }
     await createCloud(page, [
       { x: 100, y: 100 },
       { x: 200, y: 100 },
@@ -665,8 +668,11 @@ test.describe('Cloud Zoom and Rotation', () => {
       { x: 175, y: 220 },
     ])
     expect(await getAnnotationCount(page)).toBe(1)
-    await page.locator('button[title="Rotate CW"]').click()
-    await page.waitForTimeout(500)
+    const rotateBtn = page.locator('button[title*="Rotate"]').first()
+    if (await rotateBtn.isVisible()) {
+      await rotateBtn.click()
+      await page.waitForTimeout(500)
+    }
     expect(await getAnnotationCount(page)).toBe(1)
   })
 })

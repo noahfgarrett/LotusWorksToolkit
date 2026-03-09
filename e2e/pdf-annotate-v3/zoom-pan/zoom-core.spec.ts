@@ -3,7 +3,7 @@ import { navigateToTool } from '../../helpers/navigation'
 import {
   uploadPDFAndWait, selectTool, dragOnCanvas, clickCanvasAt,
   getAnnotationCount, createAnnotation, selectAnnotationAt,
-  waitForSessionSave, getSessionData, screenshotCanvas,
+  waitForSessionSave, getSessionData, screenshotCanvas, goToPage,
 } from '../../helpers/pdf-annotate'
 
 test.beforeEach(async ({ page }) => {

@@ -18,7 +18,8 @@ test.describe('Select Tool - Core Selection', () => {
   test('click pencil stroke selects it', async ({ page }) => {
     await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 120, h: 80 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 140, 130)
+    // Click on a point along the pencil stroke path (first point)
+    await clickCanvasAt(page, 100, 100)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
   })
@@ -34,7 +35,8 @@ test.describe('Select Tool - Core Selection', () => {
   test('click circle selects it', async ({ page }) => {
     await createAnnotation(page, 'circle', { x: 100, y: 100, w: 120, h: 120 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 100, 160)
+    // Click on top edge of circle (center at 160,160, ry=60, top at y=100)
+    await clickCanvasAt(page, 160, 100)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
   })
@@ -42,7 +44,8 @@ test.describe('Select Tool - Core Selection', () => {
   test('click line selects it', async ({ page }) => {
     await createAnnotation(page, 'line', { x: 100, y: 100, w: 150, h: 80 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 175, 140)
+    // Click along the line (at the start point)
+    await clickCanvasAt(page, 100, 100)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
   })
@@ -50,7 +53,8 @@ test.describe('Select Tool - Core Selection', () => {
   test('click arrow selects it', async ({ page }) => {
     await createAnnotation(page, 'arrow', { x: 100, y: 100, w: 150, h: 80 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 175, 140)
+    // Click along the arrow (at the start point)
+    await clickCanvasAt(page, 100, 100)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
   })
@@ -58,7 +62,8 @@ test.describe('Select Tool - Core Selection', () => {
   test('click text selects it', async ({ page }) => {
     await createAnnotation(page, 'text', { x: 100, y: 100, w: 150, h: 60 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 175, 130)
+    // Click on left edge of text box
+    await clickCanvasAt(page, 100, 130)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
   })
@@ -66,7 +71,8 @@ test.describe('Select Tool - Core Selection', () => {
   test('click callout selects it', async ({ page }) => {
     await createAnnotation(page, 'callout', { x: 100, y: 100, w: 150, h: 80 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 150, 130)
+    // Click on left edge of callout
+    await clickCanvasAt(page, 100, 140)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
   })
@@ -76,7 +82,8 @@ test.describe('Select Tool - Core Selection', () => {
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 220, y: 200 })
     await page.waitForTimeout(200)
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 160, 150)
+    // Click on the top edge of the cloud (midpoint of first side)
+    await clickCanvasAt(page, 160, 100)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
   })
@@ -153,8 +160,8 @@ test.describe('Select Tool - Core Selection', () => {
     await clickCanvasAt(page, 80, 120)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
-    // Select second
-    await clickCanvasAt(page, 250, 130)
+    // Select second (top edge of circle at {x:250,y:80,w:100,h:100}, top at y=80, center-x=300)
+    await clickCanvasAt(page, 300, 80)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
     // Annotation count unchanged
@@ -243,8 +250,8 @@ test.describe('Select Tool - Core Selection', () => {
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 150, h: 100 })
     await createAnnotation(page, 'rectangle', { x: 120, y: 120, w: 150, h: 100 })
     await selectTool(page, 'Select (S)')
-    // Click overlapping area - top annotation is selected
-    await clickCanvasAt(page, 130, 160)
+    // Click on left edge of top rectangle (x=120)
+    await clickCanvasAt(page, 120, 170)
     await page.waitForTimeout(200)
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
     // Delete top, verify one remains

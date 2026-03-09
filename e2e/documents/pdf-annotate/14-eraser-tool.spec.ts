@@ -254,9 +254,13 @@ test.describe('Eraser Tool — Erasing Lines and Arrows', () => {
     await selectTool(page, 'Eraser (E)')
     await page.locator('button:has-text("Object")').click()
     await page.waitForTimeout(100)
+    // Wide sweep that crosses the line's stroke
     await drawOnCanvas(page, [
-      { x: 200, y: 195 },
-      { x: 210, y: 210 },
+      { x: 200, y: 140 },
+      { x: 200, y: 170 },
+      { x: 200, y: 200 },
+      { x: 200, y: 230 },
+      { x: 200, y: 260 },
     ])
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(0)
@@ -269,9 +273,13 @@ test.describe('Eraser Tool — Erasing Lines and Arrows', () => {
     await selectTool(page, 'Eraser (E)')
     await page.locator('button:has-text("Object")').click()
     await page.waitForTimeout(100)
+    // Wide sweep that crosses the arrow's stroke
     await drawOnCanvas(page, [
-      { x: 200, y: 195 },
-      { x: 210, y: 210 },
+      { x: 200, y: 140 },
+      { x: 200, y: 170 },
+      { x: 200, y: 200 },
+      { x: 200, y: 230 },
+      { x: 200, y: 260 },
     ])
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(0)

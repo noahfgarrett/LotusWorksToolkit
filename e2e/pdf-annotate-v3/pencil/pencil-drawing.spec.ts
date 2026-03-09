@@ -230,16 +230,9 @@ test.describe('Pencil Sticky Tool & Consecutive Draws', () => {
   })
 
   test('with sticky mode enabled, tool stays active after draw', async ({ page }) => {
-    // Double-click the draw dropdown button to enable sticky mode
-    const pencilBtn = page.locator('button[title="Pencil (P)"]').first()
-    if (await pencilBtn.isVisible().catch(() => false)) {
-      await pencilBtn.dblclick()
-    } else {
-      // If pencil isn't the active draw, use keyboard then double-click
-      await selectTool(page, 'Pencil (P)')
-      const btn = page.locator('button[title="Pencil (P)"]').first()
-      if (await btn.isVisible().catch(() => false)) await btn.dblclick()
-    }
+    // Enable sticky mode via Pin button, then select Pencil
+    await selectTool(page, 'Pencil (P)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     await drawOnCanvas(page, [
       { x: 100, y: 100 },
@@ -257,12 +250,8 @@ test.describe('Pencil Sticky Tool & Consecutive Draws', () => {
   })
 
   test('sticky mode: three consecutive draws without re-selecting', async ({ page }) => {
-    const pencilBtn = page.locator('button[title="Pencil (P)"]').first()
-    if (await pencilBtn.isVisible().catch(() => false)) {
-      await pencilBtn.dblclick()
-    } else {
-      await selectTool(page, 'Pencil (P)')
-    }
+    await selectTool(page, 'Pencil (P)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 3; i++) {
       await drawOnCanvas(page, [
@@ -291,12 +280,8 @@ test.describe('Pencil Sticky Tool & Consecutive Draws', () => {
 
   test('20+ strokes rapid fire with sticky mode', async ({ page }) => {
     test.setTimeout(180000)
-    const pencilBtn = page.locator('button[title="Pencil (P)"]').first()
-    if (await pencilBtn.isVisible().catch(() => false)) {
-      await pencilBtn.dblclick()
-    } else {
-      await selectTool(page, 'Pencil (P)')
-    }
+    await selectTool(page, 'Pencil (P)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 20; i++) {
       await drawOnCanvas(page, [
@@ -312,12 +297,8 @@ test.describe('Pencil Sticky Tool & Consecutive Draws', () => {
   })
 
   test('annotation count increments after each draw', async ({ page }) => {
-    const pencilBtn = page.locator('button[title="Pencil (P)"]').first()
-    if (await pencilBtn.isVisible().catch(() => false)) {
-      await pencilBtn.dblclick()
-    } else {
-      await selectTool(page, 'Pencil (P)')
-    }
+    await selectTool(page, 'Pencil (P)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     for (let i = 1; i <= 5; i++) {
       await drawOnCanvas(page, [
@@ -591,7 +572,8 @@ test.describe('Pencil Selection & Manipulation', () => {
     await drawOnCanvas(page, [{ x: 100, y: 150 }, { x: 250, y: 150 }])
     await page.waitForTimeout(200)
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 175, 150)
+    // Click along the pencil stroke path (at the start point x:100, y:150)
+    await clickCanvasAt(page, 100, 150)
     await page.waitForTimeout(200)
     const hint = page.locator('text=/Arrows nudge/')
     await expect(hint).toBeVisible({ timeout: 3000 })
@@ -600,14 +582,14 @@ test.describe('Pencil Selection & Manipulation', () => {
   test('draw then select and move', async ({ page }) => {
     await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 100, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await moveAnnotation(page, { x: 150, y: 115 }, { x: 250, y: 250 })
+    await moveAnnotation(page, { x: 100, y: 100 }, { x: 250, y: 250 })
     expect(await getAnnotationCount(page)).toBe(1)
   })
 
   test('draw then delete via Delete key', async ({ page }) => {
     await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 100, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await selectAnnotationAt(page, 150, 115)
+    await selectAnnotationAt(page, 100, 100)
     await page.keyboard.press('Delete')
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
@@ -616,7 +598,7 @@ test.describe('Pencil Selection & Manipulation', () => {
   test('draw then duplicate via Ctrl+D', async ({ page }) => {
     await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 100, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await selectAnnotationAt(page, 150, 115)
+    await selectAnnotationAt(page, 100, 100)
     await page.keyboard.press('Control+d')
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(2)
@@ -625,7 +607,7 @@ test.describe('Pencil Selection & Manipulation', () => {
   test('draw then copy/paste via Ctrl+C/V', async ({ page }) => {
     await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 100, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await selectAnnotationAt(page, 150, 115)
+    await selectAnnotationAt(page, 100, 100)
     await page.keyboard.press('Control+c')
     await page.waitForTimeout(200)
     await page.keyboard.press('Control+v')

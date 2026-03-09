@@ -3,6 +3,7 @@ import {
   uploadPDFAndWait,
   selectTool,
   dragOnCanvas,
+  clickCanvasAt,
   getAnnotationCount,
   createAnnotation,
   goToPage,
@@ -270,11 +271,4 @@ test.describe('Find: Core Functionality', () => {
     expect(true).toBeTruthy()
   })
 
-  async function clickCanvasAt(page: import('@playwright/test').Page, x: number, y: number) {
-    const canvas = page.locator('canvas').nth(1)
-    const box = await canvas.boundingBox()
-    if (box) {
-      await page.mouse.click(box.x + x, box.y + y)
-    }
-  }
 })

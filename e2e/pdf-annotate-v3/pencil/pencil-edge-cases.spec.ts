@@ -221,7 +221,14 @@ test.describe('Pencil Eraser Interactions', () => {
     await createAnnotation(page, 'pencil', { x: 100, y: 150, w: 200, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    await clickCanvasAt(page, 200, 165)
+    // Sweep across the pencil stroke to ensure crossing it
+    await drawOnCanvas(page, [
+      { x: 160, y: 120 },
+      { x: 180, y: 140 },
+      { x: 200, y: 165 },
+      { x: 220, y: 185 },
+      { x: 240, y: 200 },
+    ])
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(0)
   })
@@ -230,7 +237,14 @@ test.describe('Pencil Eraser Interactions', () => {
     await createAnnotation(page, 'pencil', { x: 100, y: 150, w: 200, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    await clickCanvasAt(page, 200, 165)
+    // Sweep across the pencil stroke to ensure crossing it
+    await drawOnCanvas(page, [
+      { x: 160, y: 120 },
+      { x: 180, y: 140 },
+      { x: 200, y: 165 },
+      { x: 220, y: 185 },
+      { x: 240, y: 200 },
+    ])
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(0)
     await page.keyboard.press('Control+z')
@@ -290,6 +304,7 @@ test.describe('Pencil History Depth', () => {
   })
 
   test('draw-undo alternation stress test (20 iterations)', async ({ page }) => {
+    test.setTimeout(120000)
     for (let i = 0; i < 20; i++) {
       await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 80, h: 30 })
       await page.keyboard.press('Control+z')

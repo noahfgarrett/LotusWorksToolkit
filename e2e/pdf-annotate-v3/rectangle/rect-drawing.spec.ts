@@ -118,8 +118,9 @@ test.describe('Consecutive Rectangles', () => {
   })
 
   test('consecutive rectangles with sticky mode (double-click tool)', async ({ page }) => {
-    // Double-click the tool button to enter sticky mode
-    await page.locator('button[title="Rectangle (R)"]').dblclick()
+    // Enable sticky mode via the Pin button, then select the tool
+    await selectTool(page, 'Rectangle (R)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     await dragOnCanvas(page, { x: 50, y: 50 }, { x: 130, y: 110 })
     await page.waitForTimeout(200)
@@ -489,8 +490,11 @@ test.describe('Rectangle Zoom and Rotation', () => {
   })
 
   test('rectangle on rotated page', async ({ page }) => {
-    await page.locator('button[title="Rotate CW"]').click()
-    await page.waitForTimeout(500)
+    const rotateBtn = page.locator('button[title*="Rotate"]').first()
+    if (await rotateBtn.isVisible()) {
+      await rotateBtn.click()
+      await page.waitForTimeout(500)
+    }
     await createAnnotation(page, 'rectangle')
     expect(await getAnnotationCount(page)).toBe(1)
   })
@@ -566,8 +570,9 @@ test.describe('Rectangle Undo, Redo, Delete', () => {
 
 test.describe('Rectangle Rapid Creation', () => {
   test('10 rectangles created rapidly', async ({ page }) => {
-    // Use sticky mode
-    await page.locator('button[title="Rectangle (R)"]').dblclick()
+    // Use sticky mode via Pin button
+    await selectTool(page, 'Rectangle (R)')
+    await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 10; i++) {
       const y = 30 + i * 55

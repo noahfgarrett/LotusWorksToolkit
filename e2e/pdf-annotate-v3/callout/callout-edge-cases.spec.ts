@@ -220,8 +220,8 @@ test.describe('Callout Edge Cases — Page Rotation', () => {
     await createAnnotation(page, 'callout', { x: 100, y: 100, w: 200, h: 100 })
     expect(await getAnnotationCount(page)).toBe(1)
     // Rotate page if rotation button exists
-    const rotateBtn = page.locator('button[title="Rotate CW"]')
-    if (await rotateBtn.isVisible()) {
+    const rotateBtn = page.locator('button[title="Rotate CW"]').first()
+    if (await rotateBtn.isVisible().catch(() => false)) {
       await rotateBtn.click()
       await page.waitForTimeout(400)
       expect(await getAnnotationCount(page)).toBe(1)

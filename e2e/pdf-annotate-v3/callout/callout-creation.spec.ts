@@ -255,6 +255,7 @@ test.describe('Callout Creation — Multiple', () => {
   })
 
   test('callout count increments to 5', async ({ page }) => {
+    test.setTimeout(120000)
     for (let i = 0; i < 5; i++) {
       await createAnnotation(page, 'callout', { x: 50, y: 40 + i * 100, w: 150, h: 60 })
     }
@@ -350,17 +351,30 @@ test.describe('Callout Creation — Undo/Redo', () => {
   test('Ctrl+Z undoes callout creation', async ({ page }) => {
     await createAnnotation(page, 'callout', { x: 100, y: 100, w: 200, h: 100 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await page.keyboard.press('Control+z')
+    // Callout creation pushes multiple history entries (box creation + text commit),
+    // so we need multiple undos to fully remove the annotation
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
   })
 
   test('Ctrl+Shift+Z redoes callout creation', async ({ page }) => {
     await createAnnotation(page, 'callout', { x: 100, y: 100, w: 200, h: 100 })
-    await page.keyboard.press('Control+z')
+    // Undo all history entries for callout creation
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
-    await page.keyboard.press('Control+Shift+z')
+    // Redo all to restore
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+Shift+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(1)
   })

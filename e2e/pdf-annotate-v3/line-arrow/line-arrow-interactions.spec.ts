@@ -374,7 +374,14 @@ test.describe('Line-Arrow Additional Interactions', () => {
     await createAnnotation(page, 'arrow', { x: 100, y: 300, w: 200, h: 0 })
     expect(await getAnnotationCount(page)).toBe(2)
     await selectTool(page, 'Eraser (E)')
-    await clickCanvasAt(page, 200, 100)
+    // Use a wide sweep that crosses the line's stroke but stays far from the arrow at y=300
+    await drawOnCanvas(page, [
+      { x: 150, y: 40 },
+      { x: 180, y: 70 },
+      { x: 200, y: 100 },
+      { x: 220, y: 130 },
+      { x: 250, y: 160 },
+    ])
     await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(1)
   })

@@ -265,9 +265,9 @@ test.describe('Undo/Redo - Core', () => {
   test('undo eraser restores erased annotation', async ({ page }) => {
     await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 120, h: 80 })
     expect(await getAnnotationCount(page)).toBe(1)
-    // Use eraser on the pencil stroke
+    // Use eraser on the pencil stroke — sweep across it to ensure crossing the stroke
     await selectTool(page, 'Eraser (E)')
-    await clickCanvasAt(page, 140, 130)
+    await dragOnCanvas(page, { x: 80, y: 80 }, { x: 220, y: 180 })
     await page.waitForTimeout(300)
     // May have erased it
     const countAfterErase = await getAnnotationCount(page)
@@ -279,8 +279,8 @@ test.describe('Undo/Redo - Core', () => {
   test('undo partial eraser restores original path', async ({ page }) => {
     await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 200, h: 100 })
     await selectTool(page, 'Eraser (E)')
-    // Erase part of the stroke
-    await clickCanvasAt(page, 150, 130)
+    // Erase part of the stroke — sweep vertically across to cross the stroke path
+    await dragOnCanvas(page, { x: 150, y: 80 }, { x: 150, y: 180 })
     await page.waitForTimeout(300)
     await page.keyboard.press('Control+z')
     await page.waitForTimeout(300)

@@ -366,7 +366,11 @@ test.describe('Text Creation — Undo and Redo', () => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'text', { x: 100, y: 100, w: 200, h: 50 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await page.keyboard.press('Control+z')
+    // Text creation pushes multiple history entries (box creation + text commit)
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
   })
@@ -375,10 +379,18 @@ test.describe('Text Creation — Undo and Redo', () => {
     await uploadPDFAndWait(page)
     await createAnnotation(page, 'text', { x: 100, y: 100, w: 200, h: 50 })
     expect(await getAnnotationCount(page)).toBe(1)
-    await page.keyboard.press('Control+z')
+    // Undo all history entries for text creation
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
-    await page.keyboard.press('Control+Shift+z')
+    // Redo all to restore
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Control+Shift+z')
+      await page.waitForTimeout(100)
+    }
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(1)
   })

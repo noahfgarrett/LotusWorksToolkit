@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import {
   uploadPDFAndWait,
   selectTool,
+  drawOnCanvas,
   dragOnCanvas,
   getAnnotationCount,
   createAnnotation,
