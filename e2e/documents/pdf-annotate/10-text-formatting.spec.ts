@@ -354,8 +354,8 @@ test.describe('Text Formatting — Font Size', () => {
     await sizeSelect.selectOption('24')
     await page.waitForTimeout(100)
     const fs = await textarea.evaluate(el => parseFloat(getComputedStyle(el).fontSize))
-    // Font size is multiplied by RENDER_SCALE (1.5), so 24 * 1.5 = 36
-    expect(fs).toBeGreaterThan(30)
+    // Font size is in annotation-space (no RENDER_SCALE); zoom handled via CSS transform
+    expect(fs).toBeCloseTo(24, 0)
   })
 
   test('font size 8 is available', async ({ page }) => {
@@ -656,8 +656,8 @@ test.describe('Text Formatting — Font Size Extended', () => {
     await sizeSelect.selectOption('8')
     await page.waitForTimeout(100)
     const fs = await textarea.evaluate(el => parseFloat(getComputedStyle(el).fontSize))
-    // 8 * RENDER_SCALE (1.5) = 12
-    expect(fs).toBeGreaterThanOrEqual(10)
+    // Font size is in annotation-space (no RENDER_SCALE)
+    expect(fs).toBeCloseTo(8, 0)
   })
 
   test('large font size (72) applied to textarea', async ({ page }) => {
@@ -667,7 +667,7 @@ test.describe('Text Formatting — Font Size Extended', () => {
     await sizeSelect.selectOption('72')
     await page.waitForTimeout(100)
     const fs = await textarea.evaluate(el => parseFloat(getComputedStyle(el).fontSize))
-    // 72 * 1.5 = 108
-    expect(fs).toBeGreaterThan(80)
+    // Font size is in annotation-space (no RENDER_SCALE)
+    expect(fs).toBeCloseTo(72, 0)
   })
 })

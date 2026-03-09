@@ -113,11 +113,19 @@ export async function drawOnCanvas(page: Page, points: { x: number; y: number }[
   await page.mouse.up()
 }
 
-/** Get annotation count from the status bar (UI shows "{count} ann") */
+/** Get annotation count from the annotation-list badge or session storage */
 export async function getAnnotationCount(page: Page): Promise<number> {
-  const statusText = await page.locator('text=/\\d+ ann/').textContent()
-  const match = statusText?.match(/(\d+) ann/)
-  return match ? parseInt(match[1]) : 0
+  // The badge shows the count on the annotation list button (bg-[#F47B20] rounded-full)
+  const badge = page.locator('span.bg-\\[\\#F47B20\\].rounded-full.text-\\[8px\\]')
+  const badgeCount = await badge.count()
+  if (badgeCount > 0) {
+    const text = await badge.first().textContent()
+    if (text === '99+') return 100
+    const n = parseInt(text || '0', 10)
+    return isNaN(n) ? 0 : n
+  }
+  // Badge not visible means 0 annotations
+  return 0
 }
 
 /** Click at a specific point on the annotation canvas */

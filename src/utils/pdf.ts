@@ -183,19 +183,27 @@ export async function renderPageToCanvas(
 ): Promise<void> {
   const doc = await getCachedDoc(pdfFile.id, pdfFile.file)
   const page = await doc.getPage(pageNumber)
-  const viewport = page.getViewport({ scale, rotation })
+  // Per PDF.js best practices: get viewport at logical scale, then use a
+  // transform matrix to handle HiDPI. This keeps viewport dimensions in
+  // CSS-pixel space and multiplies the pixel buffer by outputScale.
+  const outputScale = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
+  const viewport = page.getViewport({ scale: scale / outputScale, rotation })
 
   // alpha: false — canvas has a white background; disabling alpha compositing
   // gives sharper text rendering and eliminates premultiplied-alpha artifacts.
   const ctx = canvas.getContext('2d', { alpha: false })
   if (!ctx) throw new Error('Failed to get canvas context')
 
-  canvas.width = Math.floor(viewport.width)
-  canvas.height = Math.floor(viewport.height)
+  canvas.width = Math.floor(viewport.width * outputScale)
+  canvas.height = Math.floor(viewport.height * outputScale)
+
+  const transform: [number, number, number, number, number, number] | undefined =
+    outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
 
   await page.render({
     canvasContext: ctx,
     viewport,
+    transform,
     // 'print' intent renders at full fidelity (no display-specific shortcuts),
     // producing sharper text edges and more accurate colors.
     intent: 'print',

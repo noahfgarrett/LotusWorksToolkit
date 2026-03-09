@@ -88,14 +88,11 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
   if (ann.dashPattern === 'dashed') ctx.setLineDash([ann.strokeWidth * scale * 3, ann.strokeWidth * scale * 2])
   else if (ann.dashPattern === 'dotted') ctx.setLineDash([ann.strokeWidth * scale, ann.strokeWidth * scale * 2])
 
-  if (ann.type === 'highlighter') {
-    ctx.globalCompositeOperation = 'multiply'
-  }
-
   switch (ann.type) {
-    case 'pencil':
     case 'highlighter': {
+      // Text-selection-based highlights (rects) — use multiply to blend with PDF text
       if (ann.rects && ann.rects.length > 0) {
+        ctx.globalCompositeOperation = 'multiply'
         if (ann.strikethrough) {
           ctx.beginPath()
           ctx.strokeStyle = ann.color
@@ -113,6 +110,50 @@ export function drawAnnotation(ctx: CanvasRenderingContext2D, ann: Annotation, s
         }
         break
       }
+      // Freehand highlighter — render to offscreen canvas at full opacity, then
+      // composite onto main canvas at desired alpha. This prevents opacity stacking
+      // at path self-intersections and ensures identical appearance during draw and
+      // after commit.
+      if (pts.length < 2) break
+      {
+        // Compute bounding box for the offscreen canvas (with padding for stroke width)
+        const pad = ann.strokeWidth * scale
+        let minX = pts[0].x, maxX = pts[0].x, minY = pts[0].y, maxY = pts[0].y
+        for (const p of pts) {
+          if (p.x < minX) minX = p.x
+          if (p.x > maxX) maxX = p.x
+          if (p.y < minY) minY = p.y
+          if (p.y > maxY) maxY = p.y
+        }
+        const offX = minX * scale - pad
+        const offY = minY * scale - pad
+        const offW = Math.ceil((maxX - minX) * scale + pad * 2)
+        const offH = Math.ceil((maxY - minY) * scale + pad * 2)
+        if (offW < 1 || offH < 1) break
+
+        const offscreen = new OffscreenCanvas(offW, offH)
+        const offCtx = offscreen.getContext('2d')
+        if (!offCtx) break
+
+        // Draw the stroke at full opacity on the offscreen canvas
+        offCtx.strokeStyle = ann.color
+        offCtx.lineWidth = ann.strokeWidth * scale
+        offCtx.lineCap = 'butt'
+        offCtx.lineJoin = 'bevel'
+        offCtx.beginPath()
+        offCtx.moveTo(pts[0].x * scale - offX, pts[0].y * scale - offY)
+        for (let i = 1; i < pts.length; i++) {
+          offCtx.lineTo(pts[i].x * scale - offX, pts[i].y * scale - offY)
+        }
+        offCtx.stroke()
+
+        // Composite the offscreen canvas onto the main canvas at the desired alpha
+        ctx.globalAlpha = ann.opacity
+        ctx.drawImage(offscreen, offX, offY)
+      }
+      break
+    }
+    case 'pencil': {
       if (pts.length < 2) break
       if (ann.smooth === false) {
         ctx.beginPath()
