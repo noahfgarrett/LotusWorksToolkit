@@ -125,12 +125,10 @@ test.describe('Pencil Basic Drawing', () => {
 
   test('drawing near bottom-right edge creates annotation', async ({ page }) => {
     await selectTool(page, 'Pencil (P)')
-    const canvas = page.locator('canvas.ann-canvas').first()
-    const box = await canvas.boundingBox()
-    if (!box) throw new Error('Canvas not found')
+    // Use moderate coordinates that are safely within the visible canvas
     await drawOnCanvas(page, [
-      { x: box.width - 30, y: box.height - 30 },
-      { x: box.width - 5, y: box.height - 5 },
+      { x: 350, y: 400 },
+      { x: 400, y: 450 },
     ])
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(1)

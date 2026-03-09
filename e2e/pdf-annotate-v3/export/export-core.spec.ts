@@ -278,7 +278,8 @@ test.describe('Export: Core Functionality', () => {
   test('export after deleting annotation', async ({ page }) => {
     await createAnnotation(page, 'rectangle')
     await createAnnotation(page, 'circle', { x: 100, y: 200, w: 100, h: 80 })
-    await selectAnnotationAt(page, 160, 140)
+    // Hit-test detects edges — click on left edge of default rectangle (x=100)
+    await selectAnnotationAt(page, 100, 140)
     await page.keyboard.press('Delete')
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(1)
@@ -298,12 +299,16 @@ test.describe('Export: Core Functionality', () => {
   })
 
   test('export with dashed line style', async ({ page }) => {
-    // Set dash style if UI supports it
-    const dashBtn = page.locator('button').filter({ hasText: /dash/i }).first()
+    test.setTimeout(60000)
+    await selectTool(page, 'Rectangle (R)')
+    // Set dash style - the dashed button contains ╌
+    const dashBtn = page.locator('button:has-text("╌")').first()
     if (await dashBtn.isVisible().catch(() => false)) {
       await dashBtn.click()
+      await page.waitForTimeout(100)
     }
-    await createAnnotation(page, 'rectangle')
+    await dragOnCanvas(page, { x: 100, y: 100 }, { x: 220, y: 180 })
+    await page.waitForTimeout(300)
     const download = await exportPDF(page)
     expect(download.suggestedFilename()).toContain('.pdf')
   })
@@ -312,8 +317,19 @@ test.describe('Export: Core Functionality', () => {
     await createAnnotation(page, 'rectangle', { x: 80, y: 80, w: 100, h: 60 })
     await createAnnotation(page, 'circle', { x: 250, y: 80, w: 100, h: 60 })
     await selectTool(page, 'Eraser (E)')
-    await dragOnCanvas(page, { x: 80, y: 80 }, { x: 180, y: 140 })
-    await page.waitForTimeout(300)
+    // Switch to Object mode so whole annotation is deleted
+    const objectBtn = page.locator('button:has-text("Object")')
+    if (await objectBtn.isVisible().catch(() => false)) {
+      await objectBtn.click()
+      await page.waitForTimeout(100)
+    }
+    // Sweep horizontally along the rectangle's top edge (y=80)
+    await drawOnCanvas(page, [
+      { x: 60, y: 80 }, { x: 80, y: 80 }, { x: 100, y: 80 },
+      { x: 120, y: 80 }, { x: 140, y: 80 }, { x: 160, y: 80 },
+      { x: 180, y: 80 }, { x: 200, y: 80 },
+    ])
+    await page.waitForTimeout(500)
     expect(await getAnnotationCount(page)).toBeLessThanOrEqual(2)
     const download = await exportPDF(page)
     expect(download.suggestedFilename()).toContain('.pdf')

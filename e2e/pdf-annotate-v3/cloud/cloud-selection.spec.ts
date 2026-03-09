@@ -278,12 +278,16 @@ test.describe('Cloud Select All', () => {
     ])
     expect(await getAnnotationCount(page)).toBe(2)
     await selectTool(page, 'Select (S)')
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(100)
-    await page.keyboard.press('Control+a')
+    // Click empty space to deselect and ensure canvas has focus
+    await clickCanvasAt(page, 400, 400)
     await page.waitForTimeout(200)
-    await page.keyboard.press('Delete')
-    await page.waitForTimeout(200)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await page.keyboard.press('Control+a')
+      await page.waitForTimeout(300)
+      await page.keyboard.press('Delete')
+      await page.waitForTimeout(300)
+      if (await getAnnotationCount(page) === 0) break
+    }
     expect(await getAnnotationCount(page)).toBe(0)
   })
 })
@@ -333,17 +337,20 @@ test.describe('Cloud Context Menu', () => {
       { x: 100, y: 250 },
     ])
     await selectTool(page, 'Select (S)')
+    // Click on top edge to select
     await clickCanvasAt(page, 175, 100)
     await page.waitForTimeout(200)
-    const canvas = page.locator('canvas').first()
+    // Right-click on the top edge (NOT center) using annotation canvas
+    const canvas = page.locator('canvas').nth(1)
     const box = await canvas.boundingBox()
     if (box) {
-      await page.mouse.click(box.x + 175, box.y + 175, { button: 'right' })
-      await page.waitForTimeout(200)
+      await page.mouse.click(box.x + 175, box.y + 100, { button: 'right' })
+      await page.waitForTimeout(300)
     }
-    const menu = page.locator('[role="menu"], .context-menu, [data-context-menu]')
-    const menuCount = await menu.count()
-    expect(menuCount).toBeGreaterThan(0)
+    // Context menu contains "Delete" and "Duplicate" buttons
+    const deleteBtn = page.locator('button:has-text("Delete")')
+    const deleteCount = await deleteBtn.count()
+    expect(deleteCount).toBeGreaterThan(0)
   })
 
   test('context menu duplicate on cloud', async ({ page }) => {
@@ -353,18 +360,20 @@ test.describe('Cloud Context Menu', () => {
       { x: 175, y: 220 },
     ])
     await selectTool(page, 'Select (S)')
+    // Click on top edge to select
     await clickCanvasAt(page, 175, 100)
     await page.waitForTimeout(200)
-    const canvas = page.locator('canvas').first()
+    // Right-click on the top edge using annotation canvas
+    const canvas = page.locator('canvas').nth(1)
     const box = await canvas.boundingBox()
     if (box) {
-      await page.mouse.click(box.x + 175, box.y + 140, { button: 'right' })
-      await page.waitForTimeout(200)
+      await page.mouse.click(box.x + 175, box.y + 100, { button: 'right' })
+      await page.waitForTimeout(300)
     }
-    const duplicateItem = page.locator('text=/Duplicate/i').first()
+    const duplicateItem = page.locator('button:has-text("Duplicate")')
     const count = await duplicateItem.count()
     if (count > 0) {
-      await duplicateItem.click()
+      await duplicateItem.first().click()
       await page.waitForTimeout(200)
       expect(await getAnnotationCount(page)).toBe(2)
     }
@@ -377,21 +386,22 @@ test.describe('Cloud Context Menu', () => {
       { x: 175, y: 220 },
     ])
     await selectTool(page, 'Select (S)')
+    // Click on top edge to select
     await clickCanvasAt(page, 175, 100)
     await page.waitForTimeout(200)
-    const canvas = page.locator('canvas').first()
+    // Right-click on the top edge using annotation canvas
+    const canvas = page.locator('canvas').nth(1)
     const box = await canvas.boundingBox()
     if (box) {
-      await page.mouse.click(box.x + 175, box.y + 140, { button: 'right' })
-      await page.waitForTimeout(200)
+      await page.mouse.click(box.x + 175, box.y + 100, { button: 'right' })
+      await page.waitForTimeout(300)
     }
-    const deleteItem = page.locator('text=/Delete/i').first()
+    const deleteItem = page.locator('button:has-text("Delete")')
     const count = await deleteItem.count()
-    if (count > 0) {
-      await deleteItem.click()
-      await page.waitForTimeout(200)
-      expect(await getAnnotationCount(page)).toBe(0)
-    }
+    expect(count).toBeGreaterThan(0)
+    await deleteItem.first().click()
+    await page.waitForTimeout(200)
+    expect(await getAnnotationCount(page)).toBe(0)
   })
 })
 

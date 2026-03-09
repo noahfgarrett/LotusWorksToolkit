@@ -144,8 +144,19 @@ test.describe('Multi-Page: Core Functionality', () => {
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 120, h: 80 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    await dragOnCanvas(page, { x: 100, y: 100 }, { x: 220, y: 180 })
-    await page.waitForTimeout(300)
+    // Switch to Object eraser mode (default is Partial which only splits strokes)
+    const objectBtn = page.locator('button').filter({ hasText: /Object/i }).first()
+    if (await objectBtn.isVisible().catch(() => false)) {
+      await objectBtn.click()
+      await page.waitForTimeout(100)
+    }
+    // Sweep horizontally along the top edge (y=100) from outside left to outside right
+    await drawOnCanvas(page, [
+      { x: 80, y: 100 }, { x: 100, y: 100 }, { x: 120, y: 100 },
+      { x: 140, y: 100 }, { x: 160, y: 100 }, { x: 180, y: 100 },
+      { x: 200, y: 100 }, { x: 220, y: 100 }, { x: 240, y: 100 },
+    ])
+    await page.waitForTimeout(500)
     expect(await getAnnotationCount(page)).toBe(0)
   })
 
@@ -266,7 +277,8 @@ test.describe('Multi-Page: Core Functionality', () => {
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 100, h: 60 })
     await goToPage(page, 2)
     await createAnnotation(page, 'circle', { x: 100, y: 100, w: 100, h: 60 })
-    await selectAnnotationAt(page, 160, 140)
+    // Hit-test detects edges — click on top edge of circle (y=100, center-x=150)
+    await selectAnnotationAt(page, 150, 100)
     await page.keyboard.press('Delete')
     await page.waitForTimeout(200)
     expect(await getAnnotationCount(page)).toBe(0)
@@ -277,7 +289,8 @@ test.describe('Multi-Page: Core Functionality', () => {
   test('copy paste on page 2', async ({ page }) => {
     await goToPage(page, 2)
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 120, h: 80 })
-    await selectAnnotationAt(page, 160, 140)
+    // Hit-test detects edges — click on left edge (x=100)
+    await selectAnnotationAt(page, 100, 140)
     await page.keyboard.press('Control+c')
     await page.keyboard.press('Control+v')
     await page.waitForTimeout(300)
@@ -345,8 +358,19 @@ test.describe('Multi-Page: Core Functionality', () => {
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 100, h: 60 })
     await goToPage(page, 1)
     await selectTool(page, 'Eraser (E)')
-    await dragOnCanvas(page, { x: 100, y: 100 }, { x: 200, y: 160 })
-    await page.waitForTimeout(300)
+    // Switch to Object eraser mode (default is Partial which only splits strokes)
+    const objectBtn = page.locator('button').filter({ hasText: /Object/i }).first()
+    if (await objectBtn.isVisible().catch(() => false)) {
+      await objectBtn.click()
+      await page.waitForTimeout(100)
+    }
+    // Sweep horizontally along the top edge (y=100) from outside left to outside right
+    await drawOnCanvas(page, [
+      { x: 80, y: 100 }, { x: 100, y: 100 }, { x: 120, y: 100 },
+      { x: 140, y: 100 }, { x: 160, y: 100 }, { x: 180, y: 100 },
+      { x: 200, y: 100 }, { x: 220, y: 100 },
+    ])
+    await page.waitForTimeout(500)
     expect(await getAnnotationCount(page)).toBe(0)
     await goToPage(page, 2)
     expect(await getAnnotationCount(page)).toBe(1)

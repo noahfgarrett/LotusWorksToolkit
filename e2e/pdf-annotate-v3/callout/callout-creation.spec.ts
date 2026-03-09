@@ -242,24 +242,32 @@ test.describe('Callout Creation — Border Colors', () => {
 
 test.describe('Callout Creation — Multiple', () => {
   test('two consecutive callouts result in count of 2', async ({ page }) => {
+    test.setTimeout(60000)
     await createAnnotation(page, 'callout', { x: 50, y: 60, w: 180, h: 80 })
-    await createAnnotation(page, 'callout', { x: 50, y: 250, w: 180, h: 80 })
-    expect(await getAnnotationCount(page)).toBe(2)
+    await page.waitForTimeout(1000)
+    await createAnnotation(page, 'callout', { x: 50, y: 300, w: 180, h: 80 })
+    await page.waitForTimeout(1000)
+    await expect(page.locator('text=/2 ann/')).toBeVisible({ timeout: 5000 })
   })
 
   test('three callouts result in count of 3', async ({ page }) => {
+    test.setTimeout(60000)
     await createAnnotation(page, 'callout', { x: 50, y: 50, w: 150, h: 70 })
-    await createAnnotation(page, 'callout', { x: 50, y: 200, w: 150, h: 70 })
-    await createAnnotation(page, 'callout', { x: 50, y: 350, w: 150, h: 70 })
-    expect(await getAnnotationCount(page)).toBe(3)
+    await page.waitForTimeout(1000)
+    await createAnnotation(page, 'callout', { x: 250, y: 50, w: 150, h: 70 })
+    await page.waitForTimeout(1000)
+    await createAnnotation(page, 'callout', { x: 50, y: 300, w: 150, h: 70 })
+    await page.waitForTimeout(1000)
+    await expect(page.locator('text=/3 ann/')).toBeVisible({ timeout: 5000 })
   })
 
   test('callout count increments to 5', async ({ page }) => {
     test.setTimeout(120000)
     for (let i = 0; i < 5; i++) {
-      await createAnnotation(page, 'callout', { x: 50, y: 40 + i * 100, w: 150, h: 60 })
+      await createAnnotation(page, 'callout', { x: 30 + (i % 2) * 200, y: 30 + Math.floor(i / 2) * 120, w: 150, h: 60 })
+      await page.waitForTimeout(1000)
     }
-    expect(await getAnnotationCount(page)).toBe(5)
+    await expect(page.locator('text=/5 ann/')).toBeVisible({ timeout: 5000 })
   })
 })
 

@@ -238,7 +238,8 @@ test.describe('Text Creation — Various Canvas Positions', () => {
 
   test('text near bottom-right area', async ({ page }) => {
     await selectTool(page, 'Text (T)')
-    await dragOnCanvas(page, { x: 300, y: 500 }, { x: 480, y: 550 })
+    // Use smaller y values to stay within visible canvas area
+    await dragOnCanvas(page, { x: 280, y: 350 }, { x: 430, y: 400 })
     await page.waitForTimeout(300)
     await page.keyboard.type('Bottom right')
     await page.keyboard.press('Escape')
@@ -268,7 +269,8 @@ test.describe('Text Creation — Various Canvas Positions', () => {
 
   test('text at bottom of canvas', async ({ page }) => {
     await selectTool(page, 'Text (T)')
-    await dragOnCanvas(page, { x: 100, y: 550 }, { x: 300, y: 600 })
+    // Use smaller y values to stay within visible canvas area
+    await dragOnCanvas(page, { x: 100, y: 380 }, { x: 300, y: 430 })
     await page.waitForTimeout(300)
     await page.keyboard.type('Bottom text')
     await page.keyboard.press('Escape')

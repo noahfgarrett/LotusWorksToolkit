@@ -45,7 +45,9 @@ test.describe('Session: Core Functionality', () => {
     await waitForSessionSave(page)
     const session = await getSessionData(page)
     expect(session).not.toBeNull()
-    expect(session.fileName || session.file?.name).toBeTruthy()
+    // File name stored under session.file.fileName
+    const hasFileName = session.file?.fileName || session.fileName || session.file?.name
+    expect(hasFileName).toBeTruthy()
   })
 
   test('session contains annotations', async ({ page }) => {

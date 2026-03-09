@@ -48,11 +48,15 @@ test.describe('Export: Visual Verification', () => {
   })
 
   test('export with dashed lines produces valid PDF', async ({ page }) => {
-    const dashBtn = page.locator('button').filter({ hasText: /dash/i }).first()
+    test.setTimeout(60000)
+    await selectTool(page, 'Line (L)')
+    const dashBtn = page.locator('button:has-text("╌")').first()
     if (await dashBtn.isVisible().catch(() => false)) {
       await dashBtn.click()
+      await page.waitForTimeout(100)
     }
-    await createAnnotation(page, 'line', { x: 80, y: 100, w: 250, h: 0 })
+    await dragOnCanvas(page, { x: 80, y: 100 }, { x: 330, y: 100 })
+    await page.waitForTimeout(200)
     await createAnnotation(page, 'rectangle', { x: 80, y: 150, w: 150, h: 100 })
     const download = await exportPDF(page)
     const path = await download.path()
@@ -72,10 +76,10 @@ test.describe('Export: Visual Verification', () => {
   })
 
   test('export with rounded corner rectangles produces valid PDF', async ({ page }) => {
-    const roundBtn = page.locator('button').filter({ hasText: /round/i }).first()
-    if (await roundBtn.isVisible().catch(() => false)) {
-      await roundBtn.click()
-    }
+    test.setTimeout(60000)
+    // Corner radius is controlled by a slider, not a button
+    await selectTool(page, 'Rectangle (R)')
+    await page.waitForTimeout(200)
     await createAnnotation(page, 'rectangle', { x: 80, y: 80, w: 150, h: 100 })
     const download = await exportPDF(page)
     const path = await download.path()

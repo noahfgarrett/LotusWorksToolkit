@@ -134,7 +134,9 @@ test.describe('Chaos: Recovery Testing', () => {
       await page.keyboard.press('Control+=')
     }
     await page.waitForTimeout(300)
-    // App should handle extreme zoom without crashing
+    // App should handle extreme zoom without crashing — fit to page before drawing
+    await page.keyboard.press('f')
+    await page.waitForTimeout(300)
     await createAnnotation(page, 'rectangle')
     expect(await getAnnotationCount(page)).toBe(1)
   })
@@ -320,12 +322,20 @@ test.describe('Chaos: Recovery Testing', () => {
 
   test('rapid page up/down does not crash (multi-page)', async ({ page }) => {
     await uploadPDFAndWait(page, 'sample.pdf')
+    // Blur the input so keyboard shortcuts go to the canvas
+    await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null
+      if (el) el.blur()
+    })
+    await page.waitForTimeout(200)
     for (let i = 0; i < 20; i++) {
       await page.keyboard.press('PageDown')
       await page.waitForTimeout(30)
       await page.keyboard.press('PageUp')
       await page.waitForTimeout(30)
     }
+    await page.waitForTimeout(300)
+    await goToPage(page, 1)
     await createAnnotation(page, 'rectangle')
     expect(await getAnnotationCount(page)).toBe(1)
   })

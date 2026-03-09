@@ -46,11 +46,16 @@ test.describe('Rectangle Color Changes', () => {
   test('change fill color of selected rectangle', async ({ page }) => {
     await createAnnotation(page, 'rectangle')
     await selectAnnotationAt(page, 100, 140)
-    // Enable fill
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    // Enable fill by setting a color on the fill color input
+    const fillColorInput = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(200)
       await waitForSessionSave(page)
       const session = await getSessionData(page)
@@ -62,19 +67,25 @@ test.describe('Rectangle Color Changes', () => {
   test('remove fill color from rectangle', async ({ page }) => {
     // Create rectangle with fill
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 200 })
     await page.waitForTimeout(200)
 
-    // Select it and remove fill
+    // Select it and remove fill by clicking "None" button
     await selectAnnotationAt(page, 100, 150)
     if (fillCount > 0) {
-      await fillToggle.click()
+      const noneBtn = page.locator('button:has-text("None")').first()
+      await noneBtn.click()
       await page.waitForTimeout(200)
       await waitForSessionSave(page)
       const session = await getSessionData(page)
@@ -148,7 +159,8 @@ test.describe('Rectangle Dash Pattern Changes', () => {
   test('change dash pattern to dashed on existing rectangle', async ({ page }) => {
     await createAnnotation(page, 'rectangle')
     await selectAnnotationAt(page, 100, 140)
-    const dashedBtn = page.locator('button:has-text("╌")').first()
+    const dashButtons = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dashedBtn = dashButtons.nth(1)
     const count = await dashedBtn.count()
     if (count > 0) {
       await dashedBtn.click()
@@ -163,7 +175,8 @@ test.describe('Rectangle Dash Pattern Changes', () => {
   test('change dash pattern to dotted on existing rectangle', async ({ page }) => {
     await createAnnotation(page, 'rectangle')
     await selectAnnotationAt(page, 100, 140)
-    const dottedBtn = page.locator('button:has-text("┈")').first()
+    const dashButtons = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dottedBtn = dashButtons.nth(2)
     const count = await dottedBtn.count()
     if (count > 0) {
       await dottedBtn.click()
@@ -179,14 +192,15 @@ test.describe('Rectangle Dash Pattern Changes', () => {
     await createAnnotation(page, 'rectangle')
     await selectAnnotationAt(page, 100, 140)
     // Set to dashed first
-    const dashedBtn = page.locator('button:has-text("╌")').first()
+    const dashButtons = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dashedBtn = dashButtons.nth(1)
     const dashedCount = await dashedBtn.count()
     if (dashedCount > 0) {
       await dashedBtn.click()
       await page.waitForTimeout(100)
     }
     // Set back to solid
-    const solidBtn = page.locator('button:has-text("━")').first()
+    const solidBtn = dashButtons.nth(0)
     const solidCount = await solidBtn.count()
     if (solidCount > 0) {
       await solidBtn.click()
@@ -215,10 +229,15 @@ test.describe('Rectangle Visual Appearance', () => {
     await page.waitForTimeout(200)
 
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
     await dragOnCanvas(page, { x: 50, y: 50 }, { x: 200, y: 150 })
@@ -330,13 +349,20 @@ test.describe('Rectangle Properties Persistence', () => {
 test.describe('Rectangle Property Combinations', () => {
   test('rectangle with fill and dashed pattern', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    // Set fill color via the color input
+    const fillColorInput = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
-    const dashedBtn = page.locator('button:has-text("╌")').first()
+    const dashBtns1 = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dashedBtn = dashBtns1.nth(1)
     const dashedCount = await dashedBtn.count()
     if (dashedCount > 0) {
       await dashedBtn.click()
@@ -353,13 +379,19 @@ test.describe('Rectangle Property Combinations', () => {
 
   test('rectangle with fill and dotted pattern', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
-    const dottedBtn = page.locator('button:has-text("┈")').first()
+    const dashBtns2 = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dottedBtn = dashBtns2.nth(2)
     const dottedCount = await dottedBtn.count()
     if (dottedCount > 0) {
       await dottedBtn.click()
@@ -372,10 +404,15 @@ test.describe('Rectangle Property Combinations', () => {
 
   test('rectangle with fill and rounded corners', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput2 = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput2.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput2.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
     const radiusSlider = page.locator('input[type="range"][max="30"]')
@@ -397,10 +434,15 @@ test.describe('Rectangle Property Combinations', () => {
 
   test('rectangle with transparent fill', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput3 = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput3.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput3.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
     // Set opacity low (second range slider)
@@ -422,10 +464,15 @@ test.describe('Rectangle Property Combinations', () => {
       await page.waitForTimeout(100)
     }
     // Enable fill (which should use same color)
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput4 = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput4.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput4.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 200 })
@@ -439,13 +486,19 @@ test.describe('Rectangle Property Combinations', () => {
 
   test('fill + dotted + rounded corners combination', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput5 = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput5.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput5.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
-    const dottedBtn = page.locator('button:has-text("┈")').first()
+    const dashBtns3 = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dottedBtn = dashBtns3.nth(2)
     const dottedCount = await dottedBtn.count()
     if (dottedCount > 0) {
       await dottedBtn.click()
@@ -464,7 +517,8 @@ test.describe('Rectangle Property Combinations', () => {
 
   test('rounded corners + dashed + no fill', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const dashedBtn = page.locator('button:has-text("╌")').first()
+    const dashBtns4 = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dashedBtn = dashBtns4.nth(1)
     const dashedCount = await dashedBtn.count()
     if (dashedCount > 0) {
       await dashedBtn.click()
@@ -495,10 +549,15 @@ test.describe('Rectangle Property Combinations', () => {
     const opacitySlider = page.locator('input[type="range"]').nth(1)
     await opacitySlider.fill('90')
     await page.waitForTimeout(100)
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput6 = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput6.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput6.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 300, y: 250 })
@@ -618,13 +677,19 @@ test.describe('Rectangle Property Combinations', () => {
 
   test('all combinations: fill + dashed + rounded corners', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    const fillColorInput7 = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput7.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      await fillColorInput7.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
-    const dashedBtn = page.locator('button:has-text("╌")').first()
+    const dashBtns5 = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dashedBtn = dashBtns5.nth(1)
     const dashedCount = await dashedBtn.count()
     if (dashedCount > 0) {
       await dashedBtn.click()

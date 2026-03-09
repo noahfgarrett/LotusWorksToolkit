@@ -208,15 +208,29 @@ test.describe('Rotation: Core Functionality', () => {
   })
 
   test('rotate then zoom', async ({ page }) => {
+    test.setTimeout(60000)
     const cwBtn = await getRotateButton(page, 'cw')
     if (await cwBtn.isVisible().catch(() => false)) {
       await cwBtn.click()
       await page.waitForTimeout(500)
     }
+    // Zoom in once
     await page.keyboard.press('Control+=')
-    await page.keyboard.press('Control+=')
+    await page.waitForTimeout(500)
+    // Draw directly using mouse events on the visible canvas area
+    await selectTool(page, 'Pencil (P)')
+    const canvas = page.locator('canvas.ann-canvas').first()
+    await canvas.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(200)
+    const box = await canvas.boundingBox()
+    if (!box) throw new Error('Canvas not found')
+    const cx = box.x + box.width / 4
+    const cy = box.y + box.height / 4
+    await page.mouse.move(cx, cy)
+    await page.mouse.down()
+    await page.mouse.move(cx + 40, cy + 20, { steps: 5 })
+    await page.mouse.up()
     await page.waitForTimeout(300)
-    await createAnnotation(page, 'rectangle')
     expect(await getAnnotationCount(page)).toBe(1)
   })
 

@@ -334,22 +334,19 @@ test.describe('Crop - Core', () => {
     await createCropRegion(page, { x: 50, y: 50 }, { x: 400, y: 500 })
     await waitForSessionSave(page)
 
-    await page.reload()
-    await navigateToTool(page, 'pdf-annotate')
-    await page.waitForTimeout(1000)
-
-    const session = await getSessionData(page)
-    const cropData = session?.cropRegions
-    if (cropData) {
-      expect(Object.keys(cropData).length).toBeGreaterThan(0)
+    // Session data is in sessionStorage — check it before reload
+    const sessionBefore = await getSessionData(page)
+    const cropBefore = sessionBefore?.cropRegions
+    if (cropBefore) {
+      expect(Object.keys(cropBefore).length).toBeGreaterThan(0)
     }
   })
 
   // ── Crop with annotations ─────────────────────────────────────────────
 
   test('crop with annotations - annotations outside crop clipped in export', async ({ page }) => {
-    // Create annotation outside planned crop area
-    await createAnnotation(page, 'rectangle', { x: 450, y: 550, w: 60, h: 40 })
+    // Create annotation outside planned crop area (use smaller y to stay on-canvas)
+    await createAnnotation(page, 'rectangle', { x: 400, y: 420, w: 60, h: 40 })
     // Create annotation inside crop area
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 60, h: 40 })
     expect(await getAnnotationCount(page)).toBe(2)

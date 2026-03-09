@@ -207,21 +207,27 @@ test.describe('Cross-Tool: Eraser on All Types', () => {
     await createAnnotation(page, 'rectangle', { x: 100, y: 100, w: 150, h: 100 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    // Default is partial mode — shapes get converted to polyline and split
-    // Sweep across the rectangle to cross edges
+    // Default is partial mode — ensure partial is active
+    const partialBtn = page.locator('button:has-text("Partial")')
+    if (await partialBtn.isVisible()) {
+      await partialBtn.click()
+      await page.waitForTimeout(100)
+    }
+    // Sweep vertically across the top edge (y=100) of the rectangle at x=175
+    // to cut through the perimeter of the converted polyline shape
     await drawOnCanvas(page, [
-      { x: 80, y: 150 },
-      { x: 100, y: 150 },
-      { x: 130, y: 150 },
-      { x: 175, y: 150 },
-      { x: 220, y: 150 },
-      { x: 250, y: 150 },
-      { x: 270, y: 150 },
+      { x: 175, y: 70 },
+      { x: 175, y: 85 },
+      { x: 175, y: 100 },
+      { x: 175, y: 115 },
+      { x: 175, y: 130 },
     ])
     await page.waitForTimeout(300)
     const count = await getAnnotationCount(page)
-    // Partial mode splits shapes into polyline fragments
-    expect(count).toBeLessThanOrEqual(2)
+    // Partial mode converts shape to polyline and splits — result depends on
+    // how many edges the erase path crossed. Could be 0 (fully removed),
+    // 2+ (split into fragments). The original 1 annotation should have changed.
+    expect(count !== 1).toBeTruthy()
   })
 
   test('undo erase of pencil restores it', async ({ page }) => {

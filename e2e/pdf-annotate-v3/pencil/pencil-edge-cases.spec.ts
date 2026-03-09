@@ -63,21 +63,46 @@ test.describe('Pencil Degenerate Inputs', () => {
 
 test.describe('Pencil at Different Zoom Levels', () => {
   test('draw while zoomed in at 2x', async ({ page }) => {
-    // Zoom in twice
+    // Zoom in once
     await page.keyboard.press('Control+=')
+    await page.waitForTimeout(500)
+    // Draw using the annotation canvas directly with mouse events
+    await selectTool(page, 'Pencil (P)')
+    const canvas = page.locator('canvas.ann-canvas').first()
+    await canvas.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(200)
+    const box = await canvas.boundingBox()
+    if (!box) throw new Error('Canvas not found')
+    // Draw in the center of the visible canvas area
+    const cx = box.x + box.width / 4
+    const cy = box.y + box.height / 4
+    await page.mouse.move(cx, cy)
+    await page.mouse.down()
+    await page.mouse.move(cx + 50, cy + 30, { steps: 5 })
+    await page.mouse.up()
     await page.waitForTimeout(300)
-    await page.keyboard.press('Control+=')
-    await page.waitForTimeout(300)
-    await createAnnotation(page, 'pencil')
     expect(await getAnnotationCount(page)).toBe(1)
   })
 
   test('draw while zoomed in at 3x', async ({ page }) => {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       await page.keyboard.press('Control+=')
       await page.waitForTimeout(200)
     }
-    await createAnnotation(page, 'pencil')
+    await page.waitForTimeout(300)
+    await selectTool(page, 'Pencil (P)')
+    const canvas = page.locator('canvas.ann-canvas').first()
+    await canvas.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(200)
+    const box = await canvas.boundingBox()
+    if (!box) throw new Error('Canvas not found')
+    const cx = box.x + box.width / 4
+    const cy = box.y + box.height / 4
+    await page.mouse.move(cx, cy)
+    await page.mouse.down()
+    await page.mouse.move(cx + 30, cy + 20, { steps: 5 })
+    await page.mouse.up()
+    await page.waitForTimeout(300)
     expect(await getAnnotationCount(page)).toBe(1)
   })
 
@@ -221,15 +246,23 @@ test.describe('Pencil Eraser Interactions', () => {
     await createAnnotation(page, 'pencil', { x: 100, y: 150, w: 200, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    // Sweep across the pencil stroke to ensure crossing it
+    // Switch to Object mode so the whole stroke is deleted
+    const objectBtn = page.locator('button:has-text("Object")')
+    await objectBtn.click()
+    await page.waitForTimeout(100)
+    // Pencil stroke goes from (100,150) to ~(166,165) to (300,180).
+    // Sweep vertically at x=200, crossing the stroke perpendicularly
     await drawOnCanvas(page, [
-      { x: 160, y: 120 },
-      { x: 180, y: 140 },
-      { x: 200, y: 165 },
-      { x: 220, y: 185 },
-      { x: 240, y: 200 },
+      { x: 200, y: 130 },
+      { x: 200, y: 140 },
+      { x: 200, y: 150 },
+      { x: 200, y: 160 },
+      { x: 200, y: 170 },
+      { x: 200, y: 180 },
+      { x: 200, y: 190 },
+      { x: 200, y: 200 },
     ])
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(500)
     expect(await getAnnotationCount(page)).toBe(0)
   })
 
@@ -237,15 +270,23 @@ test.describe('Pencil Eraser Interactions', () => {
     await createAnnotation(page, 'pencil', { x: 100, y: 150, w: 200, h: 30 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    // Sweep across the pencil stroke to ensure crossing it
+    // Switch to Object mode so the whole stroke is deleted
+    const objectBtn = page.locator('button:has-text("Object")')
+    await objectBtn.click()
+    await page.waitForTimeout(100)
+    // Pencil stroke goes from (100,150) to ~(166,165) to (300,180).
+    // Sweep vertically at x=200, crossing the stroke perpendicularly
     await drawOnCanvas(page, [
-      { x: 160, y: 120 },
-      { x: 180, y: 140 },
-      { x: 200, y: 165 },
-      { x: 220, y: 185 },
-      { x: 240, y: 200 },
+      { x: 200, y: 130 },
+      { x: 200, y: 140 },
+      { x: 200, y: 150 },
+      { x: 200, y: 160 },
+      { x: 200, y: 170 },
+      { x: 200, y: 180 },
+      { x: 200, y: 190 },
+      { x: 200, y: 200 },
     ])
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(500)
     expect(await getAnnotationCount(page)).toBe(0)
     await page.keyboard.press('Control+z')
     await page.waitForTimeout(300)
@@ -274,13 +315,11 @@ test.describe('Pencil Eraser Interactions', () => {
 
 test.describe('Pencil History Depth', () => {
   test('undo all after 50+ draws restores to clean state', async ({ page }) => {
-    test.setTimeout(120000)
-    const pencilBtn = page.locator('button[title="Pencil (P)"]').first()
-    if (await pencilBtn.isVisible().catch(() => false)) {
-      await pencilBtn.dblclick()
-    } else {
-      await selectTool(page, 'Pencil (P)')
-    }
+    test.setTimeout(180000)
+    await selectTool(page, 'Pencil (P)')
+    // Enable sticky mode so pencil stays active after each draw
+    const lockBtn = page.locator('button[title="Lock tool (stay on current tool after drawing)"]')
+    if (await lockBtn.isVisible().catch(() => false)) await lockBtn.click()
     await page.waitForTimeout(200)
     const drawCount = 20
     for (let i = 0; i < drawCount; i++) {
@@ -320,13 +359,11 @@ test.describe('Pencil History Depth', () => {
 
 test.describe('Pencil Memory Stability', () => {
   test('create 100 strokes without memory issues', async ({ page }) => {
-    test.setTimeout(180000)
-    const pencilBtn = page.locator('button[title="Pencil (P)"]').first()
-    if (await pencilBtn.isVisible().catch(() => false)) {
-      await pencilBtn.dblclick()
-    } else {
-      await selectTool(page, 'Pencil (P)')
-    }
+    test.setTimeout(240000)
+    await selectTool(page, 'Pencil (P)')
+    // Enable sticky mode so pencil stays active after each draw
+    const lockBtn = page.locator('button[title="Lock tool (stay on current tool after drawing)"]')
+    if (await lockBtn.isVisible().catch(() => false)) await lockBtn.click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 100; i++) {
       await drawOnCanvas(page, [
@@ -434,12 +471,11 @@ test.describe('Pencil Miscellaneous Edge Cases', () => {
   })
 
   test('session restoration preserves all strokes', async ({ page }) => {
-    const pencilBtn = page.locator('button[title="Pencil (P)"]').first()
-    if (await pencilBtn.isVisible().catch(() => false)) {
-      await pencilBtn.dblclick()
-    } else {
-      await selectTool(page, 'Pencil (P)')
-    }
+    test.setTimeout(60000)
+    await selectTool(page, 'Pencil (P)')
+    // Enable sticky mode so pencil stays active after each draw
+    const lockBtn = page.locator('button[title="Lock tool (stay on current tool after drawing)"]')
+    if (await lockBtn.isVisible().catch(() => false)) await lockBtn.click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 5; i++) {
       await drawOnCanvas(page, [

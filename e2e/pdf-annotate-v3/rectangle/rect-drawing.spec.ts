@@ -180,10 +180,18 @@ test.describe('Rectangle Default Properties', () => {
 test.describe('Rectangle Fill Color', () => {
   test('rectangle with fill color stores fillColor in session', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    // Click the fill color toggle/button
-    const fillToggle = page.locator('text=/Fill/i').first()
-    await fillToggle.click()
-    await page.waitForTimeout(200)
+    // Set fill color by interacting with the color input next to the "Fill" label
+    const fillColorInput = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput.count()
+    if (fillCount > 0) {
+      await fillColorInput.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await page.waitForTimeout(200)
+    }
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 200 })
     await page.waitForTimeout(200)
     await waitForSessionSave(page)
@@ -272,7 +280,8 @@ test.describe('Rectangle Corner Radius', () => {
 test.describe('Rectangle Dash Patterns', () => {
   test('rectangle with dashed outline', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const dashedBtn = page.locator('button:has-text("╌")').first()
+    const dashButtons = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dashedBtn = dashButtons.nth(1)
     const count = await dashedBtn.count()
     if (count > 0) {
       await dashedBtn.click()
@@ -288,7 +297,8 @@ test.describe('Rectangle Dash Patterns', () => {
 
   test('rectangle with dotted outline', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const dottedBtn = page.locator('button:has-text("┈")').first()
+    const dashButtons = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dottedBtn = dashButtons.nth(2)
     const count = await dottedBtn.count()
     if (count > 0) {
       await dottedBtn.click()
@@ -335,11 +345,19 @@ test.describe('Rectangle Color Presets', () => {
 
   test('rectangle with custom hex color via input', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const hexInput = page.locator('input[type="color"], input[placeholder*="hex" i], input[value^="#"]').first()
-    const count = await hexInput.count()
-    if (count > 0) {
-      await hexInput.fill('#FF5733')
-      await page.waitForTimeout(100)
+    // Click the '#' button to show the hex input field
+    const hexToggle = page.locator('button').filter({ hasText: '#' }).first()
+    const toggleCount = await hexToggle.count()
+    if (toggleCount > 0) {
+      await hexToggle.click()
+      await page.waitForTimeout(200)
+      // Now fill the visible text input for hex color
+      const hexTextInput = page.locator('input[placeholder="#000000"]').first()
+      const inputCount = await hexTextInput.count()
+      if (inputCount > 0) {
+        await hexTextInput.fill('#FF5733')
+        await page.waitForTimeout(100)
+      }
     }
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 200 })
     await page.waitForTimeout(200)
@@ -395,7 +413,8 @@ test.describe('Rectangle Stroke Width', () => {
 test.describe('Rectangle Opacity', () => {
   test('rectangle with opacity 100%', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const slider = page.locator('input[type="range"]').last()
+    // Opacity is the second range slider (index 1); .last() would be corner radius for rectangles
+    const slider = page.locator('input[type="range"]').nth(1)
     await slider.fill('100')
     await page.waitForTimeout(100)
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 200 })
@@ -408,7 +427,7 @@ test.describe('Rectangle Opacity', () => {
 
   test('rectangle with opacity 50%', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const slider = page.locator('input[type="range"]').last()
+    const slider = page.locator('input[type="range"]').nth(1)
     await slider.fill('50')
     await page.waitForTimeout(100)
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 200 })
@@ -421,7 +440,7 @@ test.describe('Rectangle Opacity', () => {
 
   test('rectangle with opacity 10% (minimum)', async ({ page }) => {
     await selectTool(page, 'Rectangle (R)')
-    const slider = page.locator('input[type="range"]').last()
+    const slider = page.locator('input[type="range"]').nth(1)
     await slider.fill('10')
     await page.waitForTimeout(100)
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 200 })
@@ -575,9 +594,9 @@ test.describe('Rectangle Rapid Creation', () => {
     await page.locator('button[title="Lock tool (stay on current tool after drawing)"]').click()
     await page.waitForTimeout(200)
     for (let i = 0; i < 10; i++) {
-      const y = 30 + i * 55
-      await dragOnCanvas(page, { x: 50, y }, { x: 150, y: y + 40 })
-      await page.waitForTimeout(150)
+      const y = 20 + i * 50
+      await dragOnCanvas(page, { x: 50, y }, { x: 150, y: y + 35 })
+      await page.waitForTimeout(200)
     }
     expect(await getAnnotationCount(page)).toBe(10)
   })

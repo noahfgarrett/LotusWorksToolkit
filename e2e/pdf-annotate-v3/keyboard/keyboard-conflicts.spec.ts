@@ -86,11 +86,12 @@ test.describe('Keyboard Shortcuts - Conflict Prevention', () => {
   test('Delete key inside text deletes character not annotation', async ({ page }) => {
     await createAnnotation(page, 'text', { x: 100, y: 100, w: 150, h: 60 })
     await selectTool(page, 'Select (S)')
-    await clickCanvasAt(page, 175, 130)
-    await page.waitForTimeout(200)
-    await clickCanvasAt(page, 175, 130)
-    await clickCanvasAt(page, 175, 130)
-    await page.waitForTimeout(200)
+    // Double-click at the text edge to re-enter edit mode
+    const canvas = page.locator('canvas').nth(1)
+    const box = await canvas.boundingBox()
+    if (!box) throw new Error('Canvas not found')
+    await page.mouse.dblclick(box.x + 100, box.y + 100)
+    await page.waitForTimeout(500)
     // Delete should delete text character, not the annotation
     await page.keyboard.press('Delete')
     await page.waitForTimeout(200)

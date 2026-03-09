@@ -63,7 +63,7 @@ function getAnnotationCanvasForPage(page: Page, pageNum: number) {
 
 /** Get the current page number from the page input */
 async function getCurrentPageNum(page: Page): Promise<number> {
-  const input = page.locator('input[type="number"]')
+  const input = page.locator('input[type="number"]').first()
   const count = await input.count()
   if (count === 0) return 1 // single-page PDF
   const val = await input.inputValue()
@@ -205,12 +205,18 @@ export async function createAnnotation(
       // Type content and commit
       await page.keyboard.type('Test text')
       await page.keyboard.press('Escape')
+      await page.waitForTimeout(200)
+      // Press Escape again to clear the selection so subsequent creations work
+      await page.keyboard.press('Escape')
       await page.waitForTimeout(100)
       break
     case 'callout':
       await selectTool(page, 'Callout (O)')
       await dragOnCanvas(page, { x: r.x, y: r.y }, { x: r.x + r.w, y: r.y + r.h })
       await page.keyboard.type('Callout')
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(200)
+      // Press Escape again to clear the selection so subsequent creations work
       await page.keyboard.press('Escape')
       await page.waitForTimeout(100)
       break

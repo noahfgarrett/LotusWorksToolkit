@@ -440,18 +440,16 @@ test.describe('Stamp - Core', () => {
   })
 
   test('stamp z-order: send to back', async ({ page }) => {
+    test.setTimeout(60000)
     await createAnnotation(page, 'rectangle', { x: 180, y: 180, w: 80, h: 60 })
     await placeStamp(page, 'APPROVED', 200, 200)
     expect(await getAnnotationCount(page)).toBe(2)
 
+    // Use keyboard shortcut Ctrl+[ to send to back (z-order is context menu only)
     await selectAnnotationAt(page, 200, 200)
     await page.waitForTimeout(200)
-
-    const sendBackBtn = page.locator('button:has-text("Back"), button[title*="back"]').first()
-    if (await sendBackBtn.isVisible().catch(() => false)) {
-      await sendBackBtn.click()
-      await page.waitForTimeout(200)
-    }
+    await page.keyboard.press('Control+[')
+    await page.waitForTimeout(200)
 
     expect(await getAnnotationCount(page)).toBe(2)
   })

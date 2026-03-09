@@ -165,8 +165,10 @@ test.describe('Eraser - Partial Mode', () => {
     await waitForSessionSave(page)
     const session = await getSessionData(page)
     if (session?.annotations) {
-      const pencilAnnotations = session.annotations.filter(
-        (a: Record<string, unknown>) => a.type === 'pencil' || a.tool === 'pencil',
+      // annotations is Record<number, unknown[]> keyed by page number — flatten all pages
+      const allAnnotations = Object.values(session.annotations).flat() as Record<string, unknown>[]
+      const pencilAnnotations = allAnnotations.filter(
+        (a) => a.type === 'pencil' || a.tool === 'pencil',
       )
       if (pencilAnnotations.length >= 2) {
         // All fragments should share same stroke color and width
@@ -478,9 +480,11 @@ test.describe('Eraser - Partial Mode', () => {
     const session = await getSessionData(page)
     expect(session).not.toBeNull()
     if (session?.annotations) {
+      // annotations is Record<number, unknown[]> keyed by page number — flatten all pages
+      const allAnnotations = Object.values(session.annotations).flat() as Record<string, unknown>[]
       // Should have 2 fragments in session
-      const strokes = session.annotations.filter(
-        (a: Record<string, unknown>) => a.type === 'pencil' || a.tool === 'pencil',
+      const strokes = allAnnotations.filter(
+        (a) => a.type === 'pencil' || a.tool === 'pencil',
       )
       expect(strokes.length).toBe(2)
     }

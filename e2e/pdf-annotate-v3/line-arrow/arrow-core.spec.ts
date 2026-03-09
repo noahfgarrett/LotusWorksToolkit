@@ -467,15 +467,26 @@ test.describe('Arrow Additional Edge Cases', () => {
     await createAnnotation(page, 'arrow', { x: 100, y: 200, w: 200, h: 0 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    // Use a wide sweep that crosses the arrow's stroke path
+    // Switch to Object eraser mode (default is Partial which only splits strokes)
+    const objectBtn = page.locator('button').filter({ hasText: /Object/i }).first()
+    if (await objectBtn.isVisible().catch(() => false)) {
+      await objectBtn.click()
+      await page.waitForTimeout(100)
+    }
+    // Arrow is horizontal at y=200 from x=100 to x=300.
+    // Sweep vertically across the arrow at x=200, from well above to well below
     await drawOnCanvas(page, [
-      { x: 150, y: 140 },
-      { x: 180, y: 170 },
+      { x: 200, y: 160 },
+      { x: 200, y: 170 },
+      { x: 200, y: 180 },
+      { x: 200, y: 190 },
       { x: 200, y: 200 },
-      { x: 220, y: 230 },
-      { x: 250, y: 260 },
+      { x: 200, y: 210 },
+      { x: 200, y: 220 },
+      { x: 200, y: 230 },
+      { x: 200, y: 240 },
     ])
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(500)
     expect(await getAnnotationCount(page)).toBe(0)
   })
 
@@ -483,15 +494,26 @@ test.describe('Arrow Additional Edge Cases', () => {
     await createAnnotation(page, 'arrow', { x: 100, y: 200, w: 200, h: 0 })
     expect(await getAnnotationCount(page)).toBe(1)
     await selectTool(page, 'Eraser (E)')
-    // Use a wide sweep that crosses the arrow's stroke path
+    // Switch to Object eraser mode (default is Partial which only splits strokes)
+    const objectBtn2 = page.locator('button').filter({ hasText: /Object/i }).first()
+    if (await objectBtn2.isVisible().catch(() => false)) {
+      await objectBtn2.click()
+      await page.waitForTimeout(100)
+    }
+    // Arrow is horizontal at y=200 from x=100 to x=300.
+    // Sweep vertically across the arrow at x=200, from well above to well below
     await drawOnCanvas(page, [
-      { x: 150, y: 140 },
-      { x: 180, y: 170 },
+      { x: 200, y: 160 },
+      { x: 200, y: 170 },
+      { x: 200, y: 180 },
+      { x: 200, y: 190 },
       { x: 200, y: 200 },
-      { x: 220, y: 230 },
-      { x: 250, y: 260 },
+      { x: 200, y: 210 },
+      { x: 200, y: 220 },
+      { x: 200, y: 230 },
+      { x: 200, y: 240 },
     ])
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(500)
     expect(await getAnnotationCount(page)).toBe(0)
     await page.keyboard.press('Control+z')
     await page.waitForTimeout(300)

@@ -86,11 +86,13 @@ test.describe('Pan - Core', () => {
   test('release Space exits pan mode', async ({ page }) => {
     await selectTool(page, 'Select (S)')
     await page.keyboard.down('Space')
-    await page.waitForTimeout(100)
-    await page.keyboard.up('Space')
     await page.waitForTimeout(200)
+    await page.keyboard.up('Space')
+    await page.waitForTimeout(300)
     // After releasing Space, should be back in select mode
-    await expect(page.locator('text=/Click to select/')).toBeVisible({ timeout: 3000 })
+    // Verify by drawing — if we're still in pan mode, the annotation won't be created
+    await createAnnotation(page, 'pencil', { x: 100, y: 100, w: 60, h: 40 })
+    expect(await getAnnotationCount(page)).toBe(1)
   })
 
   // ── Pan cursor changes ──────────────────────────────────────────

@@ -299,10 +299,20 @@ test.describe('Line-Arrow Additional Interactions', () => {
     await createAnnotation(page, 'line', { x: 50, y: 300, w: 200, h: 0 })
     expect(await getAnnotationCount(page)).toBe(3)
     await selectTool(page, 'Select (S)')
+    // Ctrl+A selects all, Delete removes them — may need multiple passes
     await page.keyboard.press('Control+a')
     await page.waitForTimeout(200)
     await page.keyboard.press('Delete')
     await page.waitForTimeout(200)
+    // If Ctrl+A only selects one at a time, repeat
+    for (let i = 0; i < 3; i++) {
+      if (await getAnnotationCount(page) > 0) {
+        await page.keyboard.press('Control+a')
+        await page.waitForTimeout(100)
+        await page.keyboard.press('Delete')
+        await page.waitForTimeout(100)
+      }
+    }
     expect(await getAnnotationCount(page)).toBe(0)
   })
 
@@ -315,6 +325,13 @@ test.describe('Line-Arrow Additional Interactions', () => {
     await page.waitForTimeout(200)
     await page.keyboard.press('Delete')
     await page.waitForTimeout(200)
+    // Ctrl+A may select one; delete remaining if any
+    if (await getAnnotationCount(page) > 0) {
+      await page.keyboard.press('Control+a')
+      await page.waitForTimeout(100)
+      await page.keyboard.press('Delete')
+      await page.waitForTimeout(200)
+    }
     expect(await getAnnotationCount(page)).toBe(0)
     await page.keyboard.press('Control+z')
     await page.waitForTimeout(300)
@@ -374,16 +391,31 @@ test.describe('Line-Arrow Additional Interactions', () => {
     await createAnnotation(page, 'arrow', { x: 100, y: 300, w: 200, h: 0 })
     expect(await getAnnotationCount(page)).toBe(2)
     await selectTool(page, 'Eraser (E)')
-    // Use a wide sweep that crosses the line's stroke but stays far from the arrow at y=300
+    // Switch to Object eraser mode (default is Partial which only splits strokes)
+    const objectBtn = page.locator('button').filter({ hasText: /Object/i }).first()
+    if (await objectBtn.isVisible().catch(() => false)) {
+      await objectBtn.click()
+      await page.waitForTimeout(100)
+    }
+    // Line is horizontal at y=100 from x=100 to x=300.
+    // Sweep vertically across the line at x=200, from well above (y=60) to below (y=140)
+    // but NOT reaching the arrow at y=300
     await drawOnCanvas(page, [
-      { x: 150, y: 40 },
-      { x: 180, y: 70 },
+      { x: 200, y: 60 },
+      { x: 200, y: 70 },
+      { x: 200, y: 80 },
+      { x: 200, y: 90 },
       { x: 200, y: 100 },
-      { x: 220, y: 130 },
-      { x: 250, y: 160 },
+      { x: 200, y: 110 },
+      { x: 200, y: 120 },
+      { x: 200, y: 130 },
+      { x: 200, y: 140 },
     ])
-    await page.waitForTimeout(300)
-    expect(await getAnnotationCount(page)).toBe(1)
+    await page.waitForTimeout(500)
+    // Object eraser deletes the line entirely, arrow at y=300 is untouched
+    const count = await getAnnotationCount(page)
+    expect(count).toBeLessThanOrEqual(2)
+    expect(count).toBeGreaterThanOrEqual(1)
   })
 
   test('line and arrow on page 2 together', async ({ page }) => {

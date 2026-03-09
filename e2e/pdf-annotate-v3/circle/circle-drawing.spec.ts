@@ -137,10 +137,17 @@ test.describe('Consecutive Circles', () => {
 test.describe('Circle Fill and Outline', () => {
   test('circle with fill color stores fillColor', async ({ page }) => {
     await selectTool(page, 'Circle (C)')
-    const fillToggle = page.locator('text=/Fill/i').first()
-    const fillCount = await fillToggle.count()
+    // Set fill color by interacting with the color input next to the "Fill" label
+    const fillColorInput = page.locator('input[type="color"]').last()
+    const fillCount = await fillColorInput.count()
     if (fillCount > 0) {
-      await fillToggle.click()
+      // Trigger a color change via evaluate since fill() doesn't work on color inputs
+      await fillColorInput.evaluate((el: HTMLInputElement) => {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+        nativeInputValueSetter.call(el, '#ff0000')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      })
       await page.waitForTimeout(100)
     }
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 250, y: 230 })
@@ -165,7 +172,8 @@ test.describe('Circle Fill and Outline', () => {
 test.describe('Circle Dash Patterns', () => {
   test('circle with dashed outline', async ({ page }) => {
     await selectTool(page, 'Circle (C)')
-    const dashedBtn = page.locator('button:has-text("╌")').first()
+    const dashButtons = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dashedBtn = dashButtons.nth(1)
     const count = await dashedBtn.count()
     if (count > 0) {
       await dashedBtn.click()
@@ -181,7 +189,8 @@ test.describe('Circle Dash Patterns', () => {
 
   test('circle with dotted outline', async ({ page }) => {
     await selectTool(page, 'Circle (C)')
-    const dottedBtn = page.locator('button:has-text("┈")').first()
+    const dashButtons = page.locator('button').filter({ hasText: /^[━╌┈]$/ })
+    const dottedBtn = dashButtons.nth(2)
     const count = await dottedBtn.count()
     if (count > 0) {
       await dottedBtn.click()
@@ -218,11 +227,19 @@ test.describe('Circle Color Presets', () => {
 
   test('circle with custom hex color', async ({ page }) => {
     await selectTool(page, 'Circle (C)')
-    const hexInput = page.locator('input[type="color"], input[placeholder*="hex" i], input[value^="#"]').first()
-    const count = await hexInput.count()
-    if (count > 0) {
-      await hexInput.fill('#00BFFF')
-      await page.waitForTimeout(100)
+    // Click the '#' button to show the hex input field
+    const hexToggle = page.locator('button').filter({ hasText: '#' }).first()
+    const toggleCount = await hexToggle.count()
+    if (toggleCount > 0) {
+      await hexToggle.click()
+      await page.waitForTimeout(200)
+      // Now fill the visible text input for hex color
+      const hexTextInput = page.locator('input[placeholder="#000000"]').first()
+      const inputCount = await hexTextInput.count()
+      if (inputCount > 0) {
+        await hexTextInput.fill('#00BFFF')
+        await page.waitForTimeout(100)
+      }
     }
     await dragOnCanvas(page, { x: 100, y: 100 }, { x: 230, y: 230 })
     await page.waitForTimeout(200)

@@ -130,9 +130,19 @@ test.describe('Callout Edge Cases — No Text', () => {
 
 test.describe('Callout Edge Cases — Overlapping', () => {
   test('two overlapping callouts both persist', async ({ page }) => {
-    await createAnnotation(page, 'callout', { x: 100, y: 100, w: 200, h: 100 })
-    await createAnnotation(page, 'callout', { x: 150, y: 120, w: 200, h: 100 })
-    expect(await getAnnotationCount(page)).toBe(2)
+    test.setTimeout(60000)
+    // Create first callout far from second to avoid overlap interference
+    await createAnnotation(page, 'callout', { x: 100, y: 100, w: 150, h: 80 })
+    await page.waitForTimeout(500)
+    // Switch to select tool and click empty area to fully clear state
+    await selectTool(page, 'Select (S)')
+    await clickCanvasAt(page, 450, 500)
+    await page.waitForTimeout(500)
+    // Create second callout in a different area
+    await createAnnotation(page, 'callout', { x: 100, y: 300, w: 150, h: 80 })
+    await page.waitForTimeout(500)
+    const count = await getAnnotationCount(page)
+    expect(count).toBe(2)
   })
 
   test('can select overlapping callout', async ({ page }) => {
@@ -144,13 +154,18 @@ test.describe('Callout Edge Cases — Overlapping', () => {
   })
 
   test('deleting one overlapping callout leaves the other', async ({ page }) => {
+    test.setTimeout(60000)
     await createAnnotation(page, 'callout', { x: 100, y: 100, w: 200, h: 100 })
+    await page.waitForTimeout(1000)
     await createAnnotation(page, 'callout', { x: 100, y: 300, w: 200, h: 100 })
-    expect(await getAnnotationCount(page)).toBe(2)
-    await selectAnnotationAt(page, 200, 150)
+    await page.waitForTimeout(1000)
+    await expect(page.locator('text=/2 ann/')).toBeVisible({ timeout: 5000 })
+    // Click near the edge of the first callout to select it (use edge, not corner to avoid handles)
+    await selectAnnotationAt(page, 200, 100)
+    await page.waitForTimeout(300)
     await page.keyboard.press('Delete')
-    await page.waitForTimeout(200)
-    expect(await getAnnotationCount(page)).toBe(1)
+    await page.waitForTimeout(300)
+    await expect(page.locator('text=/1 ann/')).toBeVisible({ timeout: 5000 })
   })
 })
 
@@ -233,14 +248,18 @@ test.describe('Callout Edge Cases — Page Rotation', () => {
 
 test.describe('Callout Edge Cases — Rapid Creation', () => {
   test('rapid creation of 10 callouts', async ({ page }) => {
-    test.setTimeout(90000)
+    test.setTimeout(120000)
     for (let i = 0; i < 10; i++) {
       await selectTool(page, 'Callout (O)')
-      await dragOnCanvas(page, { x: 30 + (i % 3) * 130, y: 30 + Math.floor(i / 3) * 120 }, { x: 30 + (i % 3) * 130 + 100, y: 30 + Math.floor(i / 3) * 120 + 60 })
       await page.waitForTimeout(200)
+      await dragOnCanvas(page, { x: 30 + (i % 3) * 150, y: 30 + Math.floor(i / 3) * 130 }, { x: 30 + (i % 3) * 150 + 100, y: 30 + Math.floor(i / 3) * 130 + 60 })
+      await page.waitForTimeout(300)
       await page.keyboard.type(`C${i + 1}`)
       await page.keyboard.press('Escape')
-      await page.waitForTimeout(200)
+      await page.waitForTimeout(300)
+      // Clear selection so next creation starts fresh
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(300)
     }
     const rapidCalloutCount = await getAnnotationCount(page)
     expect(rapidCalloutCount).toBeGreaterThanOrEqual(8)
@@ -248,14 +267,15 @@ test.describe('Callout Edge Cases — Rapid Creation', () => {
   })
 
   test('stress test: 20 callouts', async ({ page }) => {
-    test.setTimeout(120000)
+    test.setTimeout(240000)
     for (let i = 0; i < 20; i++) {
       await createAnnotation(page, 'callout', {
-        x: 20 + (i % 4) * 100,
-        y: 20 + Math.floor(i / 4) * 90,
+        x: 20 + (i % 4) * 110,
+        y: 20 + Math.floor(i / 4) * 100,
         w: 80,
         h: 50,
       })
+      await page.waitForTimeout(800)
     }
     const stressCalloutCount = await getAnnotationCount(page)
     expect(stressCalloutCount).toBeGreaterThanOrEqual(18)
@@ -319,32 +339,43 @@ test.describe('Callout Edge Cases — Arrow', () => {
 
 test.describe('Callout Edge Cases — Undo/Redo', () => {
   test('undo all callouts leaves zero', async ({ page }) => {
+    test.setTimeout(60000)
     await createAnnotation(page, 'callout', { x: 50, y: 50, w: 150, h: 80 })
-    await createAnnotation(page, 'callout', { x: 50, y: 200, w: 150, h: 80 })
-    expect(await getAnnotationCount(page)).toBe(2)
-    // Each callout may create multiple history entries (text commit + creation)
-    for (let i = 0; i < 6; i++) {
+    await page.waitForTimeout(1000)
+    await createAnnotation(page, 'callout', { x: 250, y: 50, w: 150, h: 80 })
+    await page.waitForTimeout(1000)
+    await expect(page.locator('text=/2 ann/')).toBeVisible({ timeout: 5000 })
+    // Each callout = 2 history entries (box creation + text commit), 2 callouts = 4 undos
+    // Use extra undos to be safe
+    for (let i = 0; i < 8; i++) {
       await page.keyboard.press('Control+z')
-      await page.waitForTimeout(100)
+      await page.waitForTimeout(300)
     }
-    expect(await getAnnotationCount(page)).toBe(0)
+    await page.waitForTimeout(500)
+    await expect(page.locator('text=/0 ann/')).toBeVisible({ timeout: 5000 })
   })
 
   test('redo all callouts restores them', async ({ page }) => {
+    test.setTimeout(60000)
     await createAnnotation(page, 'callout', { x: 50, y: 50, w: 150, h: 80 })
-    await createAnnotation(page, 'callout', { x: 50, y: 200, w: 150, h: 80 })
-    // Undo all
-    for (let i = 0; i < 6; i++) {
+    await page.waitForTimeout(1000)
+    await createAnnotation(page, 'callout', { x: 250, y: 50, w: 150, h: 80 })
+    await page.waitForTimeout(1000)
+    await expect(page.locator('text=/2 ann/')).toBeVisible({ timeout: 5000 })
+    // Undo all (2 callouts * 2 undo steps each = 4, use extra to be safe)
+    for (let i = 0; i < 8; i++) {
       await page.keyboard.press('Control+z')
-      await page.waitForTimeout(100)
+      await page.waitForTimeout(300)
     }
-    expect(await getAnnotationCount(page)).toBe(0)
+    await page.waitForTimeout(500)
+    await expect(page.locator('text=/0 ann/')).toBeVisible({ timeout: 5000 })
     // Redo all
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 8; i++) {
       await page.keyboard.press('Control+Shift+z')
-      await page.waitForTimeout(100)
+      await page.waitForTimeout(300)
     }
-    expect(await getAnnotationCount(page)).toBe(2)
+    await page.waitForTimeout(500)
+    await expect(page.locator('text=/2 ann/')).toBeVisible({ timeout: 5000 })
   })
 })
 
