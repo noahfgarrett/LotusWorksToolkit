@@ -8,6 +8,8 @@ const FIXTURES_DIR = join(__dirname, '..', 'fixtures')
 
 /** Upload a PDF and wait for the canvas to render */
 export async function uploadPDFAndWait(page: Page, fileName: string = 'sample.pdf') {
+  // Clear any leftover session data from previous tests to prevent state bleed
+  await clearSessionData(page)
   const filePath = join(FIXTURES_DIR, fileName)
   const fileInput = page.locator('input[type="file"]')
   await fileInput.setInputFiles(filePath)
@@ -245,8 +247,9 @@ export async function goToPage(page: Page, pageNum: number) {
   if (inputCount === 0) return // single-page PDF
 
   await pageInput.fill(String(pageNum))
-  await pageInput.dispatchEvent('change')
-  await page.waitForTimeout(300)
+  // Press Enter to trigger the onKeyDown handler which calls navigateToPage
+  await pageInput.press('Enter')
+  await page.waitForTimeout(400)
 
   // Scroll the target page into the visible area of the overflow container
   await page.evaluate((pn) => {
@@ -262,7 +265,7 @@ export async function goToPage(page: Page, pageNum: number) {
     const el = document.activeElement as HTMLElement | null
     if (el) el.blur()
   })
-  await page.waitForTimeout(200)
+  await page.waitForTimeout(300)
 }
 
 /** Click Export PDF and wait for the download event */

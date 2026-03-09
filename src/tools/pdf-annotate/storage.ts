@@ -42,6 +42,7 @@ export interface PdfAnnotateSession {
   activeHighlight: string
   activeDraw: string
   activeText: string
+  cropRegions?: Record<number, { x: number; y: number; w: number; h: number }>
 }
 
 export function saveSession(session: PdfAnnotateSession): void {

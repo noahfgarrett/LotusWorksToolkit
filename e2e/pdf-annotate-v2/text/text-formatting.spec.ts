@@ -3,11 +3,12 @@ import { navigateToTool } from '../../helpers/navigation'
 import {
   uploadPDFAndWait, selectTool, dragOnCanvas, clickCanvasAt,
   doubleClickCanvasAt, getAnnotationCount, createAnnotation, exportPDF,
-  waitForSessionSave, getSessionData,
+  waitForSessionSave, getSessionData, clearSessionData,
 } from '../../helpers/pdf-annotate'
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
+  await clearSessionData(page)
   await navigateToTool(page, 'pdf-annotate')
   await uploadPDFAndWait(page)
 })

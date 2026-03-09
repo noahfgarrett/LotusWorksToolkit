@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { navigateToTool } from '../../helpers/navigation'
 import {
   uploadPDFAndWait, selectTool, clickCanvasAt,
-  exportPDF, waitForSessionSave, getSessionData,
+  exportPDF, waitForSessionSave, getSessionData, clearSessionData,
 } from '../../helpers/pdf-annotate'
 
 /** Get measurement count from the status bar (UI shows "N meas") */
@@ -32,6 +32,7 @@ async function createMeasurement(
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
+  await clearSessionData(page)
   await navigateToTool(page, 'pdf-annotate')
   await uploadPDFAndWait(page)
 })

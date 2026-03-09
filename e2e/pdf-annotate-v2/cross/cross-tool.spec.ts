@@ -2,11 +2,12 @@ import { test, expect } from '@playwright/test'
 import { navigateToTool } from '../../helpers/navigation'
 import {
   uploadPDFAndWait, selectTool, drawOnCanvas, dragOnCanvas,
-  clickCanvasAt, getAnnotationCount, createAnnotation, exportPDF,
+  clickCanvasAt, getAnnotationCount, createAnnotation, exportPDF, clearSessionData,
 } from '../../helpers/pdf-annotate'
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
+  await clearSessionData(page)
   await navigateToTool(page, 'pdf-annotate')
   await uploadPDFAndWait(page)
 })

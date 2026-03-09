@@ -1024,6 +1024,7 @@ export default function PdfAnnotateTool() {
         setActiveHighlight(session.activeHighlight as 'highlighter' | 'textHighlight' | 'textStrikethrough')
         setActiveDraw(session.activeDraw as ToolType)
         setActiveText(session.activeText as ToolType)
+        if (session.cropRegions) setCropRegions(session.cropRegions)
         historyRef.current = [structuredClone(session.annotations as PageAnnotations)]
         historyIdxRef.current = 0
         pendingScrollRef.current = { scrollTop: session.scrollTop, scrollLeft: session.scrollLeft }
@@ -1054,6 +1055,7 @@ export default function PdfAnnotateTool() {
           bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
           superscript, subscript, listType,
           eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+          cropRegions,
         } satisfies PdfAnnotateSession)
       }
     }
@@ -1080,6 +1082,7 @@ export default function PdfAnnotateTool() {
         bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
         superscript, subscript, listType,
         eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+        cropRegions,
       } satisfies PdfAnnotateSession)
     }, 1500)
     return () => clearTimeout(timer)
@@ -1087,7 +1090,7 @@ export default function PdfAnnotateTool() {
       color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
       bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
       superscript, subscript, listType,
-      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText])
+      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText, cropRegions])
 
   // ── Thumbnail loading ────────────────────────────────
 

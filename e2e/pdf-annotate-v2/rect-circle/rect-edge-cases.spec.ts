@@ -20,6 +20,7 @@ import {
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
+  await clearSessionData(page)
   await navigateToTool(page, 'pdf-annotate')
 })
 

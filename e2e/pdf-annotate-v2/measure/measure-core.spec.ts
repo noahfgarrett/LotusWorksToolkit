@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { navigateToTool } from '../../helpers/navigation'
 import {
   uploadPDFAndWait, selectTool, clickCanvasAt,
-  exportPDF,
+  exportPDF, clearSessionData,
 } from '../../helpers/pdf-annotate'
 
 /** Get measurement count from the status bar (UI shows "· {count} meas") */
@@ -17,6 +17,7 @@ async function getMeasurementCount(page: import('@playwright/test').Page): Promi
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
+  await clearSessionData(page)
   await navigateToTool(page, 'pdf-annotate')
   await uploadPDFAndWait(page)
 })
