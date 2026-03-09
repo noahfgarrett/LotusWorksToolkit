@@ -1,4 +1,5 @@
-import { useState, memo } from 'react'
+import { useState, memo, useCallback } from 'react'
+import { Pipette } from 'lucide-react'
 
 interface ColorPickerProps {
   value: string
@@ -8,11 +9,13 @@ interface ColorPickerProps {
 }
 
 const defaultPresets = [
-  '#FFFFFF', '#000000', '#EF4444', '#F97316', '#F47B20',
+  '#FFFFFF', '#000000', '#EF4444', '#F47B20',
   '#EAB308', '#22C55E', '#3B82F6', '#8B5CF6', '#EC4899',
 ]
 
 const HEX_PATTERN = /^#[0-9a-fA-F]{0,6}$/
+
+const hasEyeDropper = typeof window !== 'undefined' && 'EyeDropper' in window
 
 export const ColorPicker = memo(function ColorPicker({
   value,
@@ -21,6 +24,18 @@ export const ColorPicker = memo(function ColorPicker({
   presets = defaultPresets,
 }: ColorPickerProps) {
   const [showHex, setShowHex] = useState(false)
+
+  const pickEyeDropper = useCallback(async () => {
+    if (!hasEyeDropper) return
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dropper = new (window as any).EyeDropper()
+      const result = await dropper.open()
+      if (result?.sRGBHex) onChange(result.sRGBHex)
+    } catch {
+      // User cancelled or API unavailable — silently ignore
+    }
+  }, [onChange])
 
   return (
     <div className="space-y-2">
@@ -32,6 +47,7 @@ export const ColorPicker = memo(function ColorPicker({
         <label
           className="w-8 h-8 rounded-lg border border-white/[0.12] cursor-pointer flex-shrink-0 overflow-hidden"
           style={{ backgroundColor: value }}
+          title="Custom color"
         >
           <input
             type="color"
@@ -56,6 +72,17 @@ export const ColorPicker = memo(function ColorPicker({
             />
           ))}
         </div>
+
+        {/* Eyedropper */}
+        {hasEyeDropper && (
+          <button
+            onClick={pickEyeDropper}
+            className="flex items-center justify-center w-5 h-5 rounded text-white/30 hover:text-white/70 transition-colors"
+            title="Pick color from screen"
+          >
+            <Pipette size={13} />
+          </button>
+        )}
 
         {/* Hex input toggle */}
         <button

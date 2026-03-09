@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import {
   Bold,
   Italic,
@@ -14,6 +14,7 @@ import {
   ListOrdered,
   Plus,
   Minus,
+  Pipette,
 } from 'lucide-react';
 
 export interface FloatingToolbarProps {
@@ -53,14 +54,16 @@ export interface FloatingToolbarProps {
 const COLOR_PRESETS = [
   { name: 'Black', value: '#000000' },
   { name: 'Red', value: '#EF4444' },
-  { name: 'Orange', value: '#F97316' },
-  { name: 'Brand Orange', value: '#F47B20' },
+  { name: 'Orange', value: '#F47B20' },
   { name: 'Yellow', value: '#EAB308' },
   { name: 'Green', value: '#22C55E' },
   { name: 'Blue', value: '#3B82F6' },
   { name: 'Purple', value: '#A855F7' },
+  { name: 'Pink', value: '#EC4899' },
   { name: 'White', value: '#FFFFFF' },
 ];
+
+const hasEyeDropper = typeof window !== 'undefined' && 'EyeDropper' in window;
 
 const ICON_SIZE = 14;
 
@@ -126,6 +129,21 @@ export default function FloatingToolbar(props: FloatingToolbarProps) {
 
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
 
+  const pickEyeDropper = useCallback(async () => {
+    if (!hasEyeDropper) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dropper = new (window as any).EyeDropper();
+      const result = await dropper.open();
+      if (result?.sRGBHex) {
+        onChangeColor(result.sRGBHex);
+        setColorPickerOpen(false);
+      }
+    } catch {
+      // User cancelled — silently ignore
+    }
+  }, [onChangeColor]);
+
   return (
     <div
       className={`absolute z-50 ${visible ? 'pointer-events-auto' : 'pointer-events-none'}`}
@@ -184,25 +202,59 @@ export default function FloatingToolbar(props: FloatingToolbarProps) {
 
           {/* Color palette popover */}
           {colorPickerOpen && (
-            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-xl p-1.5 grid grid-cols-3 gap-1 z-10">
-              {COLOR_PRESETS.map((preset) => (
-                <button
-                  key={preset.value}
-                  type="button"
-                  title={preset.name}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    onChangeColor(preset.value);
-                    setColorPickerOpen(false);
-                  }}
-                  className={`w-5 h-5 rounded-full border transition-transform hover:scale-110 ${
-                    color === preset.value
-                      ? 'border-[#F47B20] ring-1 ring-[#F47B20]'
-                      : 'border-white/20'
-                  }`}
-                  style={{ backgroundColor: preset.value }}
-                />
-              ))}
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 bg-[#001a24] border border-white/[0.1] rounded-lg shadow-xl p-2 z-10 space-y-1.5">
+              <div className="grid grid-cols-3 gap-1">
+                {COLOR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    title={preset.name}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      onChangeColor(preset.value);
+                      setColorPickerOpen(false);
+                    }}
+                    className={`w-5 h-5 rounded-full border transition-transform hover:scale-110 ${
+                      color === preset.value
+                        ? 'border-[#F47B20] ring-1 ring-[#F47B20]'
+                        : 'border-white/20'
+                    }`}
+                    style={{ backgroundColor: preset.value }}
+                  />
+                ))}
+              </div>
+              <div className="h-px bg-white/[0.08]" />
+              <div className="flex items-center gap-1.5">
+                {/* Custom color picker */}
+                <label
+                  className="w-5 h-5 rounded-full border border-white/20 cursor-pointer overflow-hidden flex-shrink-0"
+                  style={{ backgroundColor: color }}
+                  title="Custom color"
+                >
+                  <input
+                    type="color"
+                    value={color}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      onChangeColor(e.target.value);
+                    }}
+                    className="opacity-0 w-0 h-0"
+                  />
+                </label>
+                <span className="text-[9px] text-white/40 select-none">Custom</span>
+                {/* Eyedropper */}
+                {hasEyeDropper && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={pickEyeDropper}
+                    className="ml-auto flex items-center justify-center w-5 h-5 rounded text-white/30 hover:text-white/70 transition-colors"
+                    title="Pick color from screen"
+                  >
+                    <Pipette size={12} />
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

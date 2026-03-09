@@ -148,7 +148,7 @@ export default function PdfAnnotateTool() {
   const hoveredAnnIdRef = useRef<string | null>(null)
 
   // Feature: sticky tool, hover tooltip, context menu, annotation list, find, stamp, crop, page input
-  const [stickyTool, setStickyTool] = useState(false)
+  const [stickyTool, setStickyTool] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; annId: string; pageNum: number } | null>(null)
   const [annListOpen, setAnnListOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
@@ -200,6 +200,8 @@ export default function PdfAnnotateTool() {
   // Tracks whether the textarea was committed via Escape key so the blur handler
   // doesn't run commitTextEditing a second time (which would add a duplicate history step)
   const escapeCommittedRef = useRef(false)
+  // Save/restore color & stroke when switching to/from highlighter
+  const preHighlightRef = useRef<{ color: string; strokeWidth: number } | null>(null)
   // Manual double-click detection: pointerdown events have e.detail=0 in Chromium
   // (unlike mousedown), so we must track click timestamps ourselves.
   const dblClickRef = useRef<{ time: number; pt: Point }>({ time: 0, pt: { x: 0, y: 0 } })
@@ -834,9 +836,9 @@ export default function PdfAnnotateTool() {
     // Fit to width, but also cap by height so the whole first page fits in view.
     // On very wide monitors this prevents extreme zoom-in (e.g. 250%) when fitting a
     // narrow page to the full container width.
-    const scaleW = containerW / maxCanvasWidthRef.current
+    const scaleW = containerW / (maxCanvasWidthRef.current / RENDER_SCALE)
     const firstDims = pageDimsMap.current.get(1)
-    const scaleH = firstDims && containerH > 0 ? containerH / firstDims.height : scaleW
+    const scaleH = firstDims && containerH > 0 ? containerH / (firstDims.height / RENDER_SCALE) : scaleW
     const newZoom = Math.round(Math.max(0.25, Math.min(4.0, Math.min(scaleW, scaleH))) * 100) / 100
     setZoom(newZoom)
     requestAnimationFrame(() => {
@@ -1115,19 +1117,19 @@ export default function PdfAnnotateTool() {
       const clampedZoom = Math.min(Math.max(zoomRef.current, 0.25), 4)
       const rs = RENDER_SCALE * clampedZoom
       await renderPageToCanvas(pdfFile, pageNum, refs.pdfCanvas, rs, rotation)
-      // Keep the CSS display size at the base (RENDER_SCALE) dimensions so the
-      // parent container layout is unchanged; zoom is applied via CSS transform above.
+      // Set CSS display size to CSS px (dims / RENDER_SCALE); the canvas buffer
+      // stays at high-DPI resolution for crisp rendering, zoom via CSS transform.
       const dims = pageDimsMap.current.get(pageNum)
       if (dims) {
-        refs.pdfCanvas.style.width = dims.width + 'px'
-        refs.pdfCanvas.style.height = dims.height + 'px'
+        refs.pdfCanvas.style.width = (dims.width / RENDER_SCALE) + 'px'
+        refs.pdfCanvas.style.height = (dims.height / RENDER_SCALE) + 'px'
       }
       // Sync annotation canvas to same pixel buffer dimensions
       refs.annCanvas.width = refs.pdfCanvas.width
       refs.annCanvas.height = refs.pdfCanvas.height
       if (dims) {
-        refs.annCanvas.style.width = dims.width + 'px'
-        refs.annCanvas.style.height = dims.height + 'px'
+        refs.annCanvas.style.width = (dims.width / RENDER_SCALE) + 'px'
+        refs.annCanvas.style.height = (dims.height / RENDER_SCALE) + 'px'
       }
       pageRenderScaleRef.current.set(pageNum, rs)
       redrawPage(pageNum)
@@ -1751,12 +1753,25 @@ export default function PdfAnnotateTool() {
     selectTextStartRef.current = null
     selectTextRectsRef.current = []
     setSelectTextToolbar(null)
-    // Highlighter: default to yellow if color is the app default
-    if ((activeTool === 'highlighter' || activeTool === 'textHighlight') && color === '#F47B20') setColor('#FFFF00')
-    // Text/callout: default to black if color is the app default
-    if ((activeTool === 'text' || activeTool === 'callout') && color === '#F47B20') setColor('#000000')
-    // Text strikethrough: default to red
-    if (activeTool === 'textStrikethrough' && (color === '#F47B20' || color === '#FFFF00')) setColor('#FF0000')
+    // Highlighter: always force yellow + thick stroke; save previous settings to restore later
+    if (activeTool === 'highlighter' || activeTool === 'textHighlight') {
+      if (!preHighlightRef.current) {
+        preHighlightRef.current = { color, strokeWidth }
+      }
+      setColor('#FFFF00')
+      setStrokeWidth(8)
+    } else {
+      // Restore previous color & stroke when leaving highlighter
+      if (preHighlightRef.current) {
+        setColor(preHighlightRef.current.color)
+        setStrokeWidth(preHighlightRef.current.strokeWidth)
+        preHighlightRef.current = null
+      }
+      // Text/callout: default to black if color is the app default
+      if ((activeTool === 'text' || activeTool === 'callout') && color === '#F47B20') setColor('#000000')
+      // Text strikethrough: default to red
+      if (activeTool === 'textStrikethrough' && (color === '#F47B20' || color === '#FFFF00')) setColor('#FF0000')
+    }
     if (editingTextId && activeTool !== 'text' && activeTool !== 'callout') {
       // Commit any open text edit when switching away from text tools
       commitTextEditing()
@@ -1941,19 +1956,10 @@ export default function PdfAnnotateTool() {
             }
             return
           }
-          // Click inside selected text/callout body → double-click edits, single-click moves
+          // Click inside selected text/callout body → enter edit mode immediately
           if (hitTest(pt, ann, 4 / zoom)) {
-            if (isDoubleClick) {
-              setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
-              enterEditMode(ann.id)
-            } else {
-              isDrawingRef.current = true
-              textDragRef.current = {
-                annId: ann.id, mode: 'move', startPt: pt,
-                origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
-                origArrows: ann.arrows ? [...ann.arrows] : undefined,
-              }
-            }
+            setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
+            enterEditMode(ann.id)
             return
           }
         }
@@ -1985,19 +1991,13 @@ export default function PdfAnnotateTool() {
           setSubscript(hitAnn.subscript || false)
           setListType(hitAnn.listType || 'none')
         }
-        // Click text/callout → double-click edits, single-click selects + moves
+        // Click text/callout → first click selects, clicking again enters edit mode
         if (hitAnn.type === 'text' || hitAnn.type === 'callout') {
-          if (isDoubleClick) {
-            setActiveTool(hitAnn.type === 'callout' ? 'callout' : 'text')
-            enterEditMode(hitAnn.id)
-          } else if (hitAnn.width && hitAnn.height) {
-            isDrawingRef.current = true
-            textDragRef.current = {
-              annId: hitAnn.id, mode: 'move', startPt: pt,
-              origPoints: [...hitAnn.points], origWidth: hitAnn.width, origHeight: hitAnn.height,
-              origArrows: hitAnn.arrows ? [...hitAnn.arrows] : undefined,
-            }
-          }
+          // Already selected → enter edit mode immediately
+          // (won't normally reach here since selected path above handles it,
+          //  but kept as fallback)
+          setActiveTool(hitAnn.type === 'callout' ? 'callout' : 'text')
+          enterEditMode(hitAnn.id)
           return
         }
         // For non-text annotations, start general move drag
@@ -2405,14 +2405,14 @@ export default function PdfAnnotateTool() {
           const handleThreshold = HANDLE_SIZE / zoom + 4
           const handle = hitTestHandle(hoverPt, selAnn, handleThreshold)
           if (handle) { setCanvasCursor(HANDLE_CURSOR_MAP[handle]); return }
-          if (hitTest(hoverPt, selAnn, 4 / zoom)) { setCanvasCursor('grab'); return }
+          if (hitTest(hoverPt, selAnn, 4 / zoom)) { setCanvasCursor('text'); return }
         }
       }
       // Check if hovering over any text/callout annotation
       const targetType = activeTool === 'text' ? 'text' : 'callout'
       const pageAnns = annotations[ap] || []
       for (let i = pageAnns.length - 1; i >= 0; i--) {
-        if (pageAnns[i].type === targetType && hitTest(hoverPt, pageAnns[i], 4 / zoom)) { setCanvasCursor('grab'); return }
+        if (pageAnns[i].type === targetType && hitTest(hoverPt, pageAnns[i], 4 / zoom)) { setCanvasCursor('text'); return }
       }
       setCanvasCursor(null)
     }
@@ -2443,7 +2443,7 @@ export default function PdfAnnotateTool() {
       }
       if (hoveredAnn) {
         // Show I-beam for text/callout annotations, move for everything else
-        setCanvasCursor((hoveredAnn.type === 'text' || hoveredAnn.type === 'callout') ? 'grab' : 'move')
+        setCanvasCursor((hoveredAnn.type === 'text' || hoveredAnn.type === 'callout') ? 'text' : 'move')
         return
       }
       // 3. Check if hovering over embedded PDF text → I-beam
@@ -3624,16 +3624,18 @@ export default function PdfAnnotateTool() {
   // Compute scaled layout dimensions for innerRef so it centers when zoomed out.
   // CSS transform: scale() shrinks visually but the layout box stays at unscaled size;
   // setting explicit width/height + margin:auto makes the box match its visual size.
+  // Page containers use CSS px (dims / RENDER_SCALE). Multiply by zoom for
+  // the visual size after CSS transform: scale(zoom).
   const innerScaledW = (() => {
     if (!pdfFile || maxCanvasWidthRef.current === 0) return 0
-    return maxCanvasWidthRef.current * zoom
+    return (maxCanvasWidthRef.current / RENDER_SCALE) * zoom
   })()
   const innerScaledH = (() => {
     if (!pdfFile) return 0
     let totalH = 0
     for (let p = 1; p <= pdfFile.pageCount; p++) {
       const d = pageDimsMap.current.get(p)
-      if (d) totalH += d.height
+      if (d) totalH += d.height / RENDER_SCALE
     }
     totalH += Math.max(0, pdfFile.pageCount - 1) * 24 // gap-6 = 24px
     return totalH * zoom
@@ -4256,8 +4258,18 @@ export default function PdfAnnotateTool() {
 
         {/* ── Canvas area ─────────────────────────── */}
         <div ref={scrollRef} className="flex-1 overflow-auto bg-black/20 relative">
-          <div className="flex justify-center p-6" style={{ minHeight: '100%', minWidth: 'fit-content' }}>
-          <div ref={innerRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: innerScaledW || undefined, height: innerScaledH || undefined }} className="flex flex-col items-center gap-6">
+          <div style={{
+            display: 'inline-block',
+            minWidth: '100%',
+            minHeight: '100%',
+            boxSizing: 'border-box',
+            paddingTop: 24,
+            paddingBottom: 24,
+            paddingLeft: innerScaledW ? `max(24px, calc((100% - ${innerScaledW}px) / 2))` : 24,
+            paddingRight: innerScaledW ? `max(24px, calc((100% - ${innerScaledW}px) / 2))` : 24,
+          }}>
+          <div style={{ height: innerScaledH || undefined }}>
+          <div ref={innerRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0' }} className="flex flex-col items-center gap-6">
             {Array.from({ length: pdfFile.pageCount }, (_, i) => i + 1).map(pageNum => {
               const dims = pageDimsMap.current.get(pageNum)
               const editingOnThisPage = editingAnn && findAnnotationPage(editingAnn.id) === pageNum
@@ -4266,7 +4278,7 @@ export default function PdfAnnotateTool() {
                   key={pageNum}
                   data-page={pageNum}
                   className="relative"
-                  style={dims ? { width: dims.width, height: dims.height } : undefined}
+                  style={dims ? { width: dims.width / RENDER_SCALE, height: dims.height / RENDER_SCALE } : undefined}
                   ref={el => {
                     if (el) {
                       const existing = pageRefsMap.current.get(pageNum)
@@ -4375,6 +4387,7 @@ export default function PdfAnnotateTool() {
                 </div>
               )
             })}
+          </div>
           </div>
           </div>
         </div>
@@ -4884,12 +4897,30 @@ export default function PdfAnnotateTool() {
           updateAnnotation(annId, s, cmPageNum)
         }
 
+        const isTextType = cmAnn.type === 'text' || cmAnn.type === 'callout'
+        const editText = () => {
+          if (!isTextType) return
+          setSelectedAnnId(annId)
+          setActiveTool(cmAnn.type === 'callout' ? 'callout' : 'text')
+          enterEditMode(annId)
+        }
+
         return (
           <div
             ref={contextMenuRef}
             className="fixed z-50 bg-[#001a24] border border-white/10 rounded-lg shadow-xl py-1 min-w-[160px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
+            {isTextType && (
+              <>
+                <button onClick={() => doAction(editText)}
+                  className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">
+                  <span>Edit Text</span>
+                  <span className="text-white/25 text-[10px]">E</span>
+                </button>
+                <div className="h-px bg-white/[0.08] my-1" />
+              </>
+            )}
             {([
               { label: 'Duplicate', hint: 'Ctrl+D', action: duplicate, cls: 'text-white/70 hover:text-white' },
               { label: 'Delete', hint: 'Del', action: del, cls: 'text-red-400 hover:text-red-300' },
