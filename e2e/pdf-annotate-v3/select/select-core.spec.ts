@@ -142,7 +142,7 @@ test.describe('Select Tool - Core Selection', () => {
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
     await clickCanvasAt(page, 400, 400)
     await page.waitForTimeout(200)
-    await expect(page.locator('text=/Click to select · Ctrl\\+A all/')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('span.truncate:has-text("Click to select")')).toBeVisible({ timeout: 3000 })
   })
 
   test('Escape deselects annotation', async ({ page }) => {
@@ -153,7 +153,7 @@ test.describe('Select Tool - Core Selection', () => {
     await expect(page.locator('text=/Arrows nudge/')).toBeVisible({ timeout: 3000 })
     await page.keyboard.press('Escape')
     await page.waitForTimeout(200)
-    await expect(page.locator('text=/Click to select · Ctrl\\+A all/')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('span.truncate:has-text("Click to select")')).toBeVisible({ timeout: 3000 })
   })
 
   // ── Switching selection ──────────────────────────────────────────
@@ -270,7 +270,7 @@ test.describe('Select Tool - Core Selection', () => {
     await selectTool(page, 'Select (S)')
     await clickCanvasAt(page, 200, 200)
     await page.waitForTimeout(200)
-    await expect(page.locator('text=/Click to select · Ctrl\\+A all/')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('span.truncate:has-text("Click to select")')).toBeVisible({ timeout: 3000 })
   })
 
   test('select then switch tool deselects', async ({ page }) => {
@@ -297,7 +297,7 @@ test.describe('Select Tool - Core Selection', () => {
     }
     // After rapid cycles, state should be consistent
     expect(await getAnnotationCount(page)).toBe(1)
-    await expect(page.locator('text=/Click to select · Ctrl\\+A all/')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('span.truncate:has-text("Click to select")')).toBeVisible({ timeout: 3000 })
   })
 
   test('select annotation on page 2', async ({ page }) => {
@@ -331,13 +331,13 @@ test.describe('Select Tool - Core Selection', () => {
     await page.waitForTimeout(100)
     await page.keyboard.press('s')
     await page.waitForTimeout(100)
-    await expect(page.locator('text=/Click to select · Ctrl\\+A all/')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('span.truncate:has-text("Click to select")')).toBeVisible({ timeout: 3000 })
   })
 
   test('selectTool helper activates select tool', async ({ page }) => {
     await selectTool(page, 'Pencil (P)')
     await selectTool(page, 'Select (S)')
-    await expect(page.locator('text=/Click to select · Ctrl\\+A all/')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('span.truncate:has-text("Click to select")')).toBeVisible({ timeout: 3000 })
   })
 
   test('arrow keys nudge selected annotation by 1px', async ({ page }) => {

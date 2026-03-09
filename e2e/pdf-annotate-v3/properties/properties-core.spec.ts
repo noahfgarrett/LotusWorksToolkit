@@ -505,6 +505,6 @@ test.describe('Properties Panel - Core', () => {
     await clickCanvasAt(page, 400, 400)
     await page.waitForTimeout(300)
     // Check that annotation-specific properties are hidden or changed
-    await expect(page.locator('text=/Click to select · Ctrl\\+A all/')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('span.truncate:has-text("Click to select")')).toBeVisible({ timeout: 3000 })
   })
 })

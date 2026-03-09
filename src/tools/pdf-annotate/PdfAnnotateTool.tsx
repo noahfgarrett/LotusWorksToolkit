@@ -191,7 +191,34 @@ export default function PdfAnnotateTool() {
   const [pageRotations, setPageRotations] = useState<Record<number, number>>({})
 
   // Text tool — PowerPoint style
-  const [selectedAnnId, setSelectedAnnId] = useState<string | null>(null)
+  // Multi-select: selectedAnnId is the "primary" (for properties panel),
+  // selectedAnnIds tracks ALL selected annotations (including primary).
+  // The setSelectedAnnId wrapper keeps both in sync for single-select calls.
+  const [selectedAnnId, _setSelectedAnnId] = useState<string | null>(null)
+  const [selectedAnnIds, setSelectedAnnIds] = useState<Set<string>>(new Set())
+  const selectedAnnIdsRef = useRef<Set<string>>(new Set())
+  const setSelectedAnnId = useCallback((id: string | null) => {
+    _setSelectedAnnId(id)
+    const next = id ? new Set([id]) : new Set<string>()
+    setSelectedAnnIds(next)
+    selectedAnnIdsRef.current = next
+  }, [])
+  const toggleAnnSelection = useCallback((id: string) => {
+    setSelectedAnnIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) { next.delete(id) } else { next.add(id) }
+      const primary = next.has(id) ? id : next.size > 0 ? [...next][next.size - 1] : null
+      _setSelectedAnnId(primary)
+      selectedAnnIdsRef.current = next
+      return next
+    })
+  }, [])
+  const selectAllAnns = useCallback((ids: string[]) => {
+    const next = new Set(ids)
+    setSelectedAnnIds(next)
+    selectedAnnIdsRef.current = next
+    _setSelectedAnnId(ids.length > 0 ? ids[ids.length - 1] : null)
+  }, [])
   const [editingTextId, setEditingTextId] = useState<string | null>(null)
   const [editingTextValue, setEditingTextValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -214,6 +241,7 @@ export default function PdfAnnotateTool() {
   } | null>(null)
   const generalDragRef = useRef<{
     annId: string; startPt: Point; origPoints: Point[]
+    multiAnns?: Array<{ annId: string; origPoints: Point[] }>
   } | null>(null)
 
   // Callout arrow drag
@@ -387,11 +415,13 @@ export default function PdfAnnotateTool() {
     const mods = eraserModsRef.current
     const pageAnns = (annotations[pageNum] || [])
       .filter(a => !isActive || !mods.removed.has(a.id))
+    const selIds = selectedAnnIdsRef.current
     for (const ann of pageAnns) {
       drawAnnotation(ctx, ann, rs)
-      if (ann.id === selectedAnnId) {
+      if (selIds.has(ann.id)) {
         drawSelectionUI(ctx, ann, rs)
-        if (ann.type === 'callout' && selectedArrowIdx !== null && ann.arrows && selectedArrowIdx < ann.arrows.length) {
+        // Callout arrow sub-selection only in single-select mode
+        if (selIds.size === 1 && ann.type === 'callout' && selectedArrowIdx !== null && ann.arrows && selectedArrowIdx < ann.arrows.length) {
           const tip = ann.arrows[selectedArrowIdx]
           const origin = nearestPointOnRect(ann.points[0].x, ann.points[0].y, ann.width!, ann.height!, tip.x, tip.y)
           ctx.save()
@@ -418,7 +448,7 @@ export default function PdfAnnotateTool() {
     }
 
     // Hover highlight
-    if (hoveredAnnId && hoveredAnnId !== selectedAnnId) {
+    if (hoveredAnnId && !selIds.has(hoveredAnnId)) {
       const hovAnn = pageAnns.find(a => a.id === hoveredAnnId)
       if (hovAnn) {
         const bounds = getAnnotationBounds(hovAnn)
@@ -687,7 +717,7 @@ export default function PdfAnnotateTool() {
     for (const m of pageMeasurements) {
       drawMeasurement(ctx, m, rs, calibration, m.id === selectedMeasureId)
     }
-  }, [annotations, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId, getAnnotation, findMatches, findIdx, cropRegions])
+  }, [annotations, activeTool, selectedAnnId, selectedAnnIds, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId, getAnnotation, findMatches, findIdx, cropRegions])
 
   const redrawAll = useCallback(() => {
     for (const pageNum of renderedPagesRef.current) {
@@ -741,6 +771,25 @@ export default function PdfAnnotateTool() {
     // Same rationale as commitAnnotation: pushHistory outside to avoid StrictMode double-invoke.
     const page = pageNum ?? activePageRef.current
     const next = { ...annotations, [page]: (annotations[page] || []).filter(a => a.id !== id) }
+    setAnnotations(next)
+    pushHistory(next)
+  }, [annotations, pushHistory])
+
+  const removeAnnotations = useCallback((ids: Set<string>, pageNum?: number) => {
+    const page = pageNum ?? activePageRef.current
+    const next = { ...annotations, [page]: (annotations[page] || []).filter(a => !ids.has(a.id)) }
+    setAnnotations(next)
+    pushHistory(next)
+  }, [annotations, pushHistory])
+
+  const updateSelectedAnnotations = useCallback((update: Partial<Annotation>) => {
+    const ids = selectedAnnIdsRef.current
+    if (ids.size === 0) return
+    const page = activePageRef.current
+    const next = {
+      ...annotations,
+      [page]: (annotations[page] || []).map(a => ids.has(a.id) ? { ...a, ...update } : a),
+    }
     setAnnotations(next)
     pushHistory(next)
   }, [annotations, pushHistory])
@@ -1250,7 +1299,7 @@ export default function PdfAnnotateTool() {
 
   // Scoped redraw for selection/hover changes (only affects active page)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { redrawPage(activePageRef.current) }, [selectedAnnId, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId])
+  useEffect(() => { redrawPage(activePageRef.current) }, [selectedAnnId, selectedAnnIds, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId])
 
   // Redraw all when find matches change (they span all pages)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1401,7 +1450,7 @@ export default function PdfAnnotateTool() {
           currentPtsRef.current = []; cloudPreviewRef.current = null; redrawAll(); return
         }
         // Two-step: if selected, deselect
-        if (selectedAnnId) { setSelectedAnnId(null); return }
+        if (selectedAnnIds.size > 0) { setSelectedAnnId(null); return }
         if (selectedMeasureId) { setSelectedMeasureId(null); return }
         return
       }
@@ -1432,8 +1481,8 @@ export default function PdfAnnotateTool() {
           setSelectedMeasureId(null)
           return
         }
-        // Delete individual callout arrow
-        if (selectedArrowIdx !== null && selectedAnnId) {
+        // Delete individual callout arrow (single-select only)
+        if (selectedArrowIdx !== null && selectedAnnId && selectedAnnIds.size === 1) {
           e.preventDefault()
           const ann = (annotations[activePageRef.current] || []).find(a => a.id === selectedAnnId)
           if (ann && ann.arrows && selectedArrowIdx < ann.arrows.length) {
@@ -1443,37 +1492,50 @@ export default function PdfAnnotateTool() {
           }
           return
         }
-        if (selectedAnnId) {
+        if (selectedAnnIds.size > 0) {
           e.preventDefault()
-          removeAnnotation(selectedAnnId)
+          if (selectedAnnIds.size === 1 && selectedAnnId) {
+            removeAnnotation(selectedAnnId)
+          } else {
+            removeAnnotations(selectedAnnIds)
+          }
           setSelectedAnnId(null)
           setSelectedArrowIdx(null)
-          addToast({ type: 'info', message: 'Annotation deleted' })
+          addToast({ type: 'info', message: selectedAnnIds.size > 1 ? `${selectedAnnIds.size} annotations deleted` : 'Annotation deleted' })
           return
         }
       }
 
-      // ── Ctrl+D: Duplicate selected annotation ──
-      if (mod && e.key === 'd' && selectedAnnId) {
+      // ── Ctrl+D: Duplicate selected annotation(s) ──
+      if (mod && e.key === 'd' && selectedAnnIds.size > 0) {
         e.preventDefault()
-        const ann = (annotations[activePageRef.current] || []).find(a => a.id === selectedAnnId)
-        if (ann) {
-          const dup: Annotation = {
-            ...structuredClone(ann),
-            id: genId(),
-            points: ann.points.map(p => ({ x: p.x + 20, y: p.y + 20 })),
-            arrows: ann.arrows?.map(p => ({ x: p.x + 20, y: p.y + 20 })),
+        const pageAnns = annotations[activePageRef.current] || []
+        const toDup = pageAnns.filter(a => selectedAnnIds.has(a.id))
+        if (toDup.length > 0) {
+          const newIds: string[] = []
+          let next = { ...annotations }
+          for (const ann of toDup) {
+            const dup: Annotation = {
+              ...structuredClone(ann),
+              id: genId(),
+              points: ann.points.map(p => ({ x: p.x + 20, y: p.y + 20 })),
+              arrows: ann.arrows?.map(p => ({ x: p.x + 20, y: p.y + 20 })),
+            }
+            next = { ...next, [activePageRef.current]: [...(next[activePageRef.current] || []), dup] }
+            newIds.push(dup.id)
           }
-          commitAnnotation(dup)
-          setSelectedAnnId(dup.id)
+          setAnnotations(next)
+          pushHistory(next)
+          selectAllAnns(newIds)
         }
         return
       }
 
-      // ── Ctrl+C: Copy selected annotation ──
-      if (mod && e.key === 'c' && selectedAnnId) {
+      // ── Ctrl+C: Copy selected annotation(s) ──
+      if (mod && e.key === 'c' && selectedAnnIds.size > 0) {
         e.preventDefault()
-        const ann = (annotations[activePageRef.current] || []).find(a => a.id === selectedAnnId)
+        const pageAnns = annotations[activePageRef.current] || []
+        const ann = pageAnns.find(a => a.id === selectedAnnId)
         if (ann) clipboardRef.current = structuredClone(ann)
         return
       }
@@ -1494,18 +1556,26 @@ export default function PdfAnnotateTool() {
       }
 
       // ── Arrow key nudge ──
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && selectedAnnId) {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && selectedAnnIds.size > 0) {
         e.preventDefault()
         const step = e.shiftKey ? 10 : 1
         const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
         const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
-        const ann = (annotations[activePageRef.current] || []).find(a => a.id === selectedAnnId)
-        if (ann) {
-          updateAnnotation(selectedAnnId, {
-            points: ann.points.map(p => ({ x: p.x + dx, y: p.y + dy })),
-            arrows: ann.arrows?.map(p => ({ x: p.x + dx, y: p.y + dy })),
-          })
+        const page = activePageRef.current
+        const pageAnns = annotations[page] || []
+        const next = {
+          ...annotations,
+          [page]: pageAnns.map(a => {
+            if (!selectedAnnIds.has(a.id)) return a
+            return {
+              ...a,
+              points: a.points.map(p => ({ x: p.x + dx, y: p.y + dy })),
+              arrows: a.arrows?.map(p => ({ x: p.x + dx, y: p.y + dy })),
+            }
+          }),
         }
+        setAnnotations(next)
+        pushHistory(next)
         return
       }
 
@@ -1634,7 +1704,7 @@ export default function PdfAnnotateTool() {
         e.preventDefault()
         const pageAnns = annotations[activePageRef.current] || []
         if (pageAnns.length > 0) {
-          setSelectedAnnId(pageAnns[pageAnns.length - 1].id)
+          selectAllAnns(pageAnns.map(a => a.id))
           setActiveTool('select')
         }
         return
@@ -1668,9 +1738,9 @@ export default function PdfAnnotateTool() {
     window.addEventListener('keydown', handler)
     window.addEventListener('keyup', keyUpHandler)
     return () => { window.removeEventListener('keydown', handler); window.removeEventListener('keyup', keyUpHandler) }
-  }, [undo, redo, selectedAnnId, editingTextId, removeAnnotation, activeTool, selectedMeasureId,
+  }, [undo, redo, selectedAnnId, selectedAnnIds, editingTextId, removeAnnotation, removeAnnotations, activeTool, selectedMeasureId,
       redrawAll, redrawPage, annotations, commitAnnotation, updateAnnotation, fitToWindow, selectedArrowIdx, navigateToPage, selectTextToolbar, zoomAtCenter, pushHistory, addToast,
-      contextMenu, findOpen, findMatches])
+      contextMenu, findOpen, findMatches, selectAllAnns, toggleAnnSelection])
 
   // ── Zoom with scroll wheel (cursor-position) ────────
 
@@ -1928,9 +1998,10 @@ export default function PdfAnnotateTool() {
     if (activeTool === 'select') {
       // If editing text, commit first
       if (editingTextId) commitTextEditing()
+      const isShift = e.shiftKey
 
-      // Check resize handles or body click on selected text/callout
-      if (selectedAnnId) {
+      // Check resize handles or body click on selected text/callout (single-select only)
+      if (selectedAnnId && selectedAnnIds.size === 1) {
         const ann = getAnnotation(selectedAnnId)
         if (ann && (ann.type === 'text' || ann.type === 'callout') && ann.width && ann.height) {
           const handleThreshold = HANDLE_SIZE / zoom + 4
@@ -1965,6 +2036,27 @@ export default function PdfAnnotateTool() {
       // Hit-test all annotations
       const hitAnn = findAnnotationAt(pt)
       if (hitAnn) {
+        // Shift+click: toggle selection
+        if (isShift) {
+          toggleAnnSelection(hitAnn.id)
+          return
+        }
+
+        // If clicking an already-selected annotation in multi-select, start multi-drag
+        if (selectedAnnIds.size > 1 && selectedAnnIds.has(hitAnn.id)) {
+          const pageAnns = annotations[pageNum] || []
+          const multiAnns = pageAnns
+            .filter(a => selectedAnnIds.has(a.id))
+            .map(a => ({ annId: a.id, origPoints: [...a.points] }))
+          isDrawingRef.current = true
+          generalDragRef.current = {
+            annId: hitAnn.id, startPt: pt, origPoints: [...hitAnn.points],
+            multiAnns,
+          }
+          return
+        }
+
+        // Single-click: select only this annotation
         setSelectedAnnId(hitAnn.id)
         // Sync properties bar to selected annotation
         setColor(hitAnn.color)
@@ -2344,10 +2436,10 @@ export default function PdfAnnotateTool() {
 
     currentPtsRef.current = [pt]
     redrawPage(pageNum)
-  }, [getPointForPage, activeTool, annotations, editingTextId, selectedAnnId, selectTextToolbar,
+  }, [getPointForPage, activeTool, annotations, editingTextId, selectedAnnId, selectedAnnIds, selectTextToolbar,
       commitTextEditing, commitAnnotation, getAnnotation, findTextAnnotationAt, findCalloutAt, findAnnotationAt, enterEditMode, redrawPage,
       eraserRadius, eraserMode, zoom, color, strokeWidth, fontSize, opacity, fontFamily, bold, italic, underline, textAlign,
-      activeStampPreset, stickyTool])
+      activeStampPreset, stickyTool, toggleAnnSelection])
 
   const handlePointerMove = useCallback((e: React.PointerEvent, pageNum: number) => {
     // Track cursor position for hover tooltip — update DOM directly to avoid re-renders on every move
@@ -2463,18 +2555,31 @@ export default function PdfAnnotateTool() {
     if (!isDrawingRef.current) return
     const pt = getPointForPage(ap, e)
 
-    // General drag (select tool: moving shapes)
+    // General drag (select tool: moving shapes — single or multi)
     if (generalDragRef.current) {
       const drag = generalDragRef.current
       const dx = pt.x - drag.startPt.x
       const dy = pt.y - drag.startPt.y
-      const newPoints = drag.origPoints.map(p => ({ x: p.x + dx, y: p.y + dy }))
-      setAnnotations(prev => ({
-        ...prev,
-        [ap]: (prev[ap] || []).map(a =>
-          a.id === drag.annId ? { ...a, points: newPoints } : a
-        ),
-      }))
+      if (drag.multiAnns && drag.multiAnns.length > 1) {
+        // Multi-drag: move all selected annotations
+        const origMap = new Map(drag.multiAnns.map(m => [m.annId, m.origPoints]))
+        setAnnotations(prev => ({
+          ...prev,
+          [ap]: (prev[ap] || []).map(a => {
+            const orig = origMap.get(a.id)
+            if (!orig) return a
+            return { ...a, points: orig.map(p => ({ x: p.x + dx, y: p.y + dy })), ...(a.arrows ? { arrows: a.arrows.map(p => ({ x: p.x + dx, y: p.y + dy })) } : {}) }
+          }),
+        }))
+      } else {
+        const newPoints = drag.origPoints.map(p => ({ x: p.x + dx, y: p.y + dy }))
+        setAnnotations(prev => ({
+          ...prev,
+          [ap]: (prev[ap] || []).map(a =>
+            a.id === drag.annId ? { ...a, points: newPoints } : a
+          ),
+        }))
+      }
       redrawPage(ap)
       return
     }
@@ -3825,7 +3930,7 @@ export default function PdfAnnotateTool() {
             value={color}
             onChange={c => {
               setColor(c)
-              if (selectedAnnId) updateAnnotation(selectedAnnId, { color: c })
+              if (selectedAnnIds.size > 0) updateSelectedAnnotations({ color: c })
             }}
             presets={(activeTool === 'highlighter' || activeTool === 'textHighlight') ? HIGHLIGHT_COLORS : ANN_COLORS}
           />
@@ -3839,7 +3944,7 @@ export default function PdfAnnotateTool() {
               onChange={e => {
                 const val = Number(e.target.value)
                 setStrokeWidth(val)
-                if (selectedAnnId && isShapeAnnSelected) updateAnnotation(selectedAnnId, { strokeWidth: val })
+                if (selectedAnnIds.size > 0 && isShapeAnnSelected) updateSelectedAnnotations({ strokeWidth: val })
               }}
               className="w-16 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
                 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
@@ -3856,7 +3961,7 @@ export default function PdfAnnotateTool() {
               onChange={e => {
                 const val = Number(e.target.value)
                 setOpacity(val)
-                if (selectedAnnId) updateAnnotation(selectedAnnId, { opacity: val / 100 })
+                if (selectedAnnIds.size > 0) updateSelectedAnnotations({ opacity: val / 100 })
               }}
               className="w-14 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
                 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
@@ -3873,14 +3978,14 @@ export default function PdfAnnotateTool() {
             <input type="color" value={fillColor || '#ffffff'}
               onChange={e => {
                 setFillColor(e.target.value)
-                if (selectedAnnId) updateAnnotation(selectedAnnId, { fillColor: e.target.value })
+                if (selectedAnnIds.size > 0) updateSelectedAnnotations({ fillColor: e.target.value })
               }}
               className="w-5 h-5 rounded cursor-pointer border border-white/[0.1] bg-transparent p-0"
             />
             <button
               onClick={() => {
                 setFillColor(null)
-                if (selectedAnnId) updateAnnotation(selectedAnnId, { fillColor: undefined })
+                if (selectedAnnIds.size > 0) updateSelectedAnnotations({ fillColor: undefined })
               }}
               className={`px-1 py-0.5 rounded text-[9px] font-medium transition-colors ${
                 !fillColor ? 'bg-white/10 text-white/60' : 'text-white/30 hover:text-white/50 border border-white/[0.08]'
@@ -3898,7 +4003,7 @@ export default function PdfAnnotateTool() {
               onChange={e => {
                 const val = Number(e.target.value)
                 setCornerRadius(val)
-                if (selectedAnnId) updateAnnotation(selectedAnnId, { cornerRadius: val })
+                if (selectedAnnIds.size > 0) updateSelectedAnnotations({ cornerRadius: val })
               }}
               className="w-12 h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer
                 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
@@ -3914,7 +4019,7 @@ export default function PdfAnnotateTool() {
             {(['solid', 'dashed', 'dotted'] as const).map(dp => (
               <button key={dp} onClick={() => {
                 setDashPattern(dp)
-                if (selectedAnnId) updateAnnotation(selectedAnnId, { dashPattern: dp === 'solid' ? undefined : dp })
+                if (selectedAnnIds.size > 0) updateSelectedAnnotations({ dashPattern: dp === 'solid' ? undefined : dp })
               }}
                 className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors ${
                   dashPattern === dp ? 'bg-[#F47B20]/20 text-[#F47B20] border border-[#F47B20]/30' : 'text-white/30 hover:text-white/50 border border-white/[0.08]'
@@ -3929,7 +4034,7 @@ export default function PdfAnnotateTool() {
         {(activeTool === 'arrow' || (activeTool === 'select' && selectedAnn?.type === 'arrow')) && (
           <button onClick={() => {
             setArrowStart(!arrowStart)
-            if (selectedAnnId) updateAnnotation(selectedAnnId, { arrowStart: !arrowStart })
+            if (selectedAnnIds.size > 0) updateSelectedAnnotations({ arrowStart: !arrowStart })
           }}
             title={arrowStart ? 'Double-headed arrow' : 'Single arrow'}
             className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors ${
@@ -4302,7 +4407,8 @@ export default function PdfAnnotateTool() {
                       const pt = getPointForPage(pageNum, e)
                       const ann = findAnnotationAt(pt, pageNum)
                       if (!ann) return
-                      setSelectedAnnId(ann.id)
+                      // If right-clicking a selected annotation in multi-select, keep multi-selection
+                      if (!selectedAnnIds.has(ann.id)) setSelectedAnnId(ann.id)
                       // Clamp to viewport so menu doesn't go off-screen
                       const menuW = 168, menuH = 200
                       const cx = Math.min(e.clientX, window.innerWidth - menuW - 8)
@@ -4727,8 +4833,9 @@ export default function PdfAnnotateTool() {
             <span>· {(measurements[currentPage] || []).length} meas</span>
           )}
           <span className="truncate">· {
-            selectedAnnId ? 'Arrows nudge · Del delete · Right-click menu' :
-            activeTool === 'select' ? 'Click to select · Ctrl+A all' :
+            selectedAnnIds.size > 1 ? `${selectedAnnIds.size} selected · Arrows nudge · Del delete` :
+            selectedAnnId ? 'Arrows nudge · Del delete · Shift+click multi-select' :
+            activeTool === 'select' ? 'Click to select · Shift+click multi · Ctrl+A all' :
             activeTool === 'text' ? 'Drag to create text' :
             activeTool === 'callout' ? 'Drag to create callout' :
             activeTool === 'cloud' ? `${currentPtsRef.current.length} pts · Dbl-click close` :
@@ -4880,7 +4987,10 @@ export default function PdfAnnotateTool() {
           const dup: Annotation = { ...structuredClone(cmAnn), id: genId(), points: cmAnn.points.map(p => ({ x: p.x + 20, y: p.y + 20 })), arrows: cmAnn.arrows?.map(p => ({ x: p.x + 20, y: p.y + 20 })) }
           commitAnnotation(dup); setSelectedAnnId(dup.id)
         }
-        const del = () => { removeAnnotation(annId, cmPageNum); setSelectedAnnId(null) }
+        const del = () => {
+          if (selectedAnnIds.size > 1) { removeAnnotations(selectedAnnIds, cmPageNum) } else { removeAnnotation(annId, cmPageNum) }
+          setSelectedAnnId(null)
+        }
         const copyStyle = () => { copiedStyleRef.current = { color: cmAnn.color, strokeWidth: cmAnn.strokeWidth, opacity: cmAnn.opacity, fontFamily: cmAnn.fontFamily, fontSize: cmAnn.fontSize, bold: cmAnn.bold, italic: cmAnn.italic } }
         const pasteStyle = () => {
           const s = copiedStyleRef.current; if (!s) return
@@ -4940,7 +5050,7 @@ export default function PdfAnnotateTool() {
                     {anns.map(ann => (
                       <div
                         key={ann.id}
-                        className={`group flex items-center gap-1 px-2 py-1 hover:bg-white/[0.06] transition-colors ${selectedAnnId === ann.id ? 'bg-white/[0.04]' : ''}`}
+                        className={`group flex items-center gap-1 px-2 py-1 hover:bg-white/[0.06] transition-colors ${selectedAnnIds.has(ann.id) ? 'bg-white/[0.04]' : ''}`}
                       >
                         <button
                           onClick={() => {
@@ -4948,7 +5058,7 @@ export default function PdfAnnotateTool() {
                             setSelectedAnnId(ann.id)
                             setActiveTool('select')
                           }}
-                          className={`flex-1 text-left text-xs flex items-center gap-1.5 min-w-0 ${selectedAnnId === ann.id ? 'text-[#F47B20]' : 'text-white/60'}`}
+                          className={`flex-1 text-left text-xs flex items-center gap-1.5 min-w-0 ${selectedAnnIds.has(ann.id) ? 'text-[#F47B20]' : 'text-white/60'}`}
                         >
                           <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: ann.color }} />
                           <span className="truncate">{annLabel(ann)}</span>
