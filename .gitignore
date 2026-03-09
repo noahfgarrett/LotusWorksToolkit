@@ -37,3 +37,5 @@ test-results/
 playwright-report/
 e2e/**/test-results/
 e2e/**/*-snapshots/
+playwright-report-v3/
+test-results/
