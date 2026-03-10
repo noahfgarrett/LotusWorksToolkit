@@ -17,6 +17,16 @@ export default defineConfig({
     video: 'retain-on-failure',
     trace: 'retain-on-failure',
     headless: true,
+    storageState: {
+      cookies: [],
+      origins: [{
+        origin: `http://localhost:${PORT}`,
+        localStorage: [{
+          name: 'lwt-user-profile',
+          value: JSON.stringify({ name: 'Test User', email: 'test@test.com', initials: 'TU' }),
+        }],
+      }],
+    },
   },
   projects: [
     {

@@ -6,13 +6,13 @@ import {
 
 // ── Core Types ──────────────────────────────────────────
 
-export type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'stamp' | 'crop'
+export type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'stamp' | 'crop' | 'note'
 
 export interface Point { x: number; y: number }
 
 export interface Annotation {
   id: string
-  type: Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'crop'>
+  type: Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'crop' | 'note'>
   points: Point[]
   color: string
   strokeWidth: number
@@ -44,11 +44,119 @@ export interface Annotation {
 
 export type PageAnnotations = Record<number, Annotation[]>
 
+/** @legacy Used by existing 2-point distance measurement code. See PolyMeasurement for expanded modes. */
 export interface Measurement {
   id: string
   startPt: Point
   endPt: Point
   page: number
+}
+
+// ── Expanded Measurement Types ──────────────────────
+
+/** Measurement modes for the expanded measurement dropdown */
+export type MeasureMode = 'distance' | 'polylength' | 'area' | 'count'
+
+/** Expanded measurement type (supports distance, polylength, area, and count) */
+export interface PolyMeasurement {
+  id: string
+  mode: MeasureMode
+  points: Point[]  // For distance: 2 points. For polylength/area: N points
+  page: number
+  label?: string   // User-defined label (especially for count groups)
+  closed?: boolean // For area: whether the polygon is closed
+}
+
+/** Count group for the count tool */
+export interface CountGroup {
+  id: string
+  label: string   // e.g., "Doors", "Outlets"
+  color: string   // Marker color
+  points: Point[] // Each click location
+  page: number
+}
+
+/** Measurement export row for CSV */
+export interface MeasurementExportRow {
+  page: number
+  type: string  // 'distance' | 'polylength' | 'area' | 'perimeter' | 'count'
+  label: string
+  value: number
+  unit: string
+}
+
+// ── Comment & Review Types ──────────────────────────
+
+/** Comment status for annotations and sticky notes */
+export type CommentStatus = 'none' | 'open' | 'accepted' | 'rejected' | 'resolved'
+
+export const COMMENT_STATUS_COLORS: Record<CommentStatus, string> = {
+  none: '#6B7280',      // gray
+  open: '#3B82F6',      // blue
+  accepted: '#22C55E',  // green
+  rejected: '#EF4444',  // red
+  resolved: '#8B5CF6',  // purple
+}
+
+/** A single comment in a thread */
+export interface Comment {
+  id: string
+  authorName: string
+  authorInitials: string
+  timestamp: number
+  text: string
+  parentId?: string // for threaded replies
+}
+
+/** Comment thread attached to any annotation or sticky note */
+export interface CommentThread {
+  annotationId: string // links to Annotation.id or StickyNote.id
+  comments: Comment[]
+  status: CommentStatus
+}
+
+/** Sticky note placed on the PDF */
+export interface StickyNote {
+  id: string
+  point: Point
+  page: number
+  color: string
+  text: string
+  minimized: boolean
+}
+
+export const STICKY_NOTE_COLORS = ['#FBBF24', '#F87171', '#34D399', '#60A5FA', '#A78BFA', '#FB923C']
+
+// ── Export & Email Types ────────────────────────────
+
+/** Export mode: review preserves metadata, final flattens permanently */
+export type ExportMode = 'review' | 'final'
+
+/** Email recipient */
+export interface EmailRecipient {
+  id: string
+  name: string
+  email: string
+}
+
+/** Named group of email recipients */
+export interface EmailGroup {
+  id: string
+  name: string
+  recipientIds: string[]
+}
+
+/** Full annotation data embedded in PDF metadata for "For Review" exports */
+export interface EmbeddedAnnotationData {
+  version: number
+  annotations: Record<number, Annotation[]>
+  measurements: Record<number, unknown[]>
+  polyMeasurements: Record<number, unknown[]>
+  countGroups: Record<number, unknown[]>
+  commentThreads: CommentThread[]
+  stickyNotes: Record<number, StickyNote[]>
+  calibration: { pixelsPerUnit: number | null; unit: string }
+  pageRotations: Record<number, number>
 }
 
 export interface CalibrationState {
@@ -73,6 +181,13 @@ export const DEFAULT_TEXTBOX_W = 200
 export const DEFAULT_TEXTBOX_H = 50
 export const ANN_COLORS = ['#000000', '#FF0000', '#F47B20', '#FFFF00', '#22C55E', '#3B82F6', '#8B5CF6', '#EC4899', '#FFFFFF']
 export const HIGHLIGHT_COLORS = ['#FFFF00', '#22C55E', '#3B82F6', '#FF69B4', '#F47B20']
+
+export const MEASURE_MODES: { mode: MeasureMode; label: string }[] = [
+  { mode: 'distance', label: 'Distance' },
+  { mode: 'polylength', label: 'Polylength' },
+  { mode: 'area', label: 'Area / Perimeter' },
+  { mode: 'count', label: 'Count' },
+]
 export const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] as const
 
 export type ToolDef = { type: ToolType; icon: React.ComponentType<{ size?: number }>; label: string }
@@ -143,7 +258,7 @@ export const CURSOR_MAP: Record<ToolType, string> = {
   arrow: 'crosshair', rectangle: 'crosshair', circle: 'crosshair',
   cloud: 'crosshair', text: 'text', eraser: 'none',
   callout: 'crosshair', measure: 'crosshair', textHighlight: 'text', textStrikethrough: 'text',
-  stamp: 'crosshair', crop: 'crosshair',
+  stamp: 'crosshair', crop: 'crosshair', note: 'crosshair',
 }
 
 export const HANDLE_CURSOR_MAP: Record<string, string> = {

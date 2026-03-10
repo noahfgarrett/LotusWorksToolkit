@@ -42,6 +42,15 @@ export interface PdfAnnotateSession {
   activeHighlight: string
   activeDraw: string
   activeText: string
+  // Expanded measurement state
+  polyMeasurements?: Record<number, unknown[]>
+  countGroups?: Record<number, unknown[]>
+  measureMode?: string
+  activeCountGroup?: string | null
+  edgeSnappingEnabled?: boolean
+  // Comment & review state
+  commentThreads?: unknown[]
+  stickyNotes?: Record<number, unknown[]>
 }
 
 export function saveSession(session: PdfAnnotateSession): void {

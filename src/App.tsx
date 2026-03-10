@@ -5,8 +5,11 @@ import { ToolContainer } from '@/components/layout/ToolContainer.tsx'
 import { WelcomeScreen } from '@/components/WelcomeScreen.tsx'
 import { ErrorBoundary } from '@/components/common/ErrorBoundary.tsx'
 import { UpdateModal } from '@/components/common/UpdateModal.tsx'
+import { UserProfileModal } from '@/components/common/UserProfileModal.tsx'
 import { checkForUpdate } from '@/utils/updateChecker.ts'
+import { getUserProfile, saveUserProfile, hasUserProfile } from '@/utils/userProfile.ts'
 import type { UpdateInfo } from '@/utils/updateChecker.ts'
+import type { UserProfile } from '@/utils/userProfile.ts'
 import type { ToolId } from '@/types/index.ts'
 
 // Lazy-load each tool
@@ -40,8 +43,17 @@ export default function App() {
   const activeTool = useAppStore((s) => s.activeTool)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [showUpdateModal, setShowUpdateModal] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
 
   useEffect(() => {
+    // Check for user profile on first launch
+    const existing = getUserProfile()
+    setUserProfile(existing)
+    if (!hasUserProfile()) {
+      setShowProfileModal(true)
+    }
+
     checkForUpdate().then((info) => {
       if (info) {
         setUpdateInfo(info)
@@ -72,6 +84,15 @@ export default function App() {
           info={updateInfo}
         />
       )}
+      <UserProfileModal
+        isOpen={showProfileModal}
+        onClose={(profile) => {
+          saveUserProfile(profile)
+          setUserProfile(profile)
+          setShowProfileModal(false)
+        }}
+        initialProfile={userProfile}
+      />
     </AppShell>
   )
 }

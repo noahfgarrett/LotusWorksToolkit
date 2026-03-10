@@ -19,6 +19,18 @@ const TOOL_LABELS: Record<string, string> = {
   'json-csv-viewer': 'Data Viewer',
 }
 
+/**
+ * Ensure user profile exists in localStorage before the app loads.
+ * Call this BEFORE page.goto() to prevent the profile modal from blocking tests.
+ */
+export async function ensureUserProfile(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem('lwt-user-profile')) {
+      localStorage.setItem('lwt-user-profile', JSON.stringify({ name: 'Test User', email: 'test@test.com', initials: 'TU' }))
+    }
+  })
+}
+
 /** Navigate to a specific tool by its ID via sidebar */
 export async function navigateToTool(page: Page, toolId: string) {
   const label = TOOL_LABELS[toolId]

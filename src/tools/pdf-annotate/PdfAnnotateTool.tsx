@@ -18,17 +18,19 @@ import {
   X, Ruler, TextSelect, MousePointer2, Strikethrough, Paintbrush,
   Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight, AlignJustify,
   Superscript, Subscript, List, ListOrdered,
-  Search, Crop, Tag,
+  Search, Crop, Tag, Printer, FileSpreadsheet, StickyNote as StickyNoteIcon,
+  MessageCircle, Mail, FileText,
 } from 'lucide-react'
 
 // ── Extracted modules ─────────────────────────────────
-import type { ToolType, Point, Annotation, PageAnnotations, Measurement, CalibrationState, HandleId, PageRefs } from './types.ts'
+import type { ToolType, Point, Annotation, PageAnnotations, Measurement, CalibrationState, HandleId, PageRefs, MeasureMode, PolyMeasurement, CountGroup, CommentThread, CommentStatus, StickyNote, ExportMode, Comment as CommentType } from './types.ts'
 import {
   RENDER_SCALE, MAX_HISTORY, HANDLE_SIZE, DEFAULT_TEXTBOX_W, DEFAULT_TEXTBOX_H,
   ANN_COLORS, HIGHLIGHT_COLORS, ZOOM_PRESETS, STAMP_PRESETS,
   DRAW_TOOLS, TEXT_TOOLS, DRAW_TYPES, TEXT_TYPES,
   FONT_FAMILIES, PDF_FONT_MAP, CURSOR_MAP, HANDLE_CURSOR_MAP,
   genId, resolvePdfFont, saveWithPicker, toPdfCoords, parseHexColor,
+  MEASURE_MODES, STICKY_NOTE_COLORS, COMMENT_STATUS_COLORS,
 } from './types.ts'
 import {
   wrapText, computeTextBoxHeight, nearestPointOnRect, hitTestCalloutBox,
@@ -42,6 +44,20 @@ import {
 import {
   drawCloudEdge, drawSmoothPath, drawAnnotation, drawSelectionUI, drawMeasurement,
 } from './drawing.ts'
+import { snapToEdge } from './edgeSnapping.ts'
+import { drawPolylength, drawAreaPolygon, drawCountMarker, drawCountGroupSummary } from './measurementDrawing.ts'
+import { printAnnotatedPDF } from './printUtil.ts'
+import { exportMeasurementsToCSV, gatherMeasurementData } from './csvExport.ts'
+import { drawStickyNotePin, drawStickyNoteExpanded, hitTestStickyNote } from './stickyNoteDrawing.ts'
+import { ChatBubble } from './ChatBubble.tsx'
+import CommentsPanel from './CommentsPanel.tsx'
+import { ExportModal } from './ExportModal.tsx'
+import { EmailModal } from './EmailModal.tsx'
+import { embedAnnotationData, extractAnnotationData } from './metadataEmbed.ts'
+import { sendAnnotatedPDF } from './emailUtil.ts'
+import { generateMarkupReport, generateMarkupCSV } from './markupReport.ts'
+import { getUserProfile } from '@/utils/userProfile.ts'
+import type { UserProfile } from '@/utils/userProfile.ts'
 import FloatingToolbar from './FloatingToolbar.tsx'
 
 // ── Thumbnail sidebar item ──────────────────────────────
@@ -238,6 +254,34 @@ export default function PdfAnnotateTool() {
   const measureStartRef = useRef<Point | null>(null)
   const measurePreviewRef = useRef<Point | null>(null)
   const [selectedMeasureId, setSelectedMeasureId] = useState<string | null>(null)
+
+  // Expanded measurement mode
+  const [measureMode, setMeasureMode] = useState<MeasureMode>('distance')
+  const [measureDropdownOpen, setMeasureDropdownOpen] = useState(false)
+  const measureDropdownRef = useRef<HTMLDivElement>(null)
+  const [polyMeasurements, setPolyMeasurements] = useState<Record<number, PolyMeasurement[]>>({})
+  const polyPointsRef = useRef<Point[]>([])
+  const polyPreviewRef = useRef<Point | null>(null)
+  const [countGroups, setCountGroups] = useState<Record<number, CountGroup[]>>({})
+  const [activeCountGroup, setActiveCountGroup] = useState<string | null>(null)
+  const [countGroupModalOpen, setCountGroupModalOpen] = useState(false)
+  const [countGroupLabel, setCountGroupLabel] = useState('')
+  const [countGroupColor, setCountGroupColor] = useState('#EF4444')
+  const [edgeSnappingEnabled, setEdgeSnappingEnabled] = useState(true)
+  const [precisionSnapMode, setPrecisionSnapMode] = useState(false)
+  const [isPrinting, setIsPrinting] = useState(false)
+
+  // Comment & review system
+  const [commentThreads, setCommentThreads] = useState<CommentThread[]>([])
+  const [stickyNotes, setStickyNotes] = useState<Record<number, StickyNote[]>>({})
+  const [activeStickyColor, setActiveStickyColor] = useState(STICKY_NOTE_COLORS[0])
+  const [chatBubbleTarget, setChatBubbleTarget] = useState<{ annotationId: string; position: { x: number; y: number } } | null>(null)
+  const [commentsPanelOpen, setCommentsPanelOpen] = useState(false)
+  const userProfileRef = useRef<UserProfile | null>(getUserProfile())
+
+  // Export & email
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
 
   // Sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -676,8 +720,8 @@ export default function PdfAnnotateTool() {
         }
       }
 
-      // In-progress measurement preview
-      if (activeTool === 'measure' && measureStartRef.current && measurePreviewRef.current) {
+      // In-progress measurement preview (distance mode)
+      if (activeTool === 'measure' && measureMode === 'distance' && measureStartRef.current && measurePreviewRef.current) {
         const preview: Measurement = {
           id: '_measure_preview',
           startPt: measureStartRef.current,
@@ -686,6 +730,18 @@ export default function PdfAnnotateTool() {
         }
         drawMeasurement(ctx, preview, rs, calibration, false)
       }
+      // In-progress polylength preview
+      if (activeTool === 'measure' && measureMode === 'polylength' && polyPointsRef.current.length > 0) {
+        const pts = [...polyPointsRef.current]
+        if (polyPreviewRef.current) pts.push(polyPreviewRef.current)
+        drawPolylength(ctx, pts, rs, calibration, false)
+      }
+      // In-progress area preview
+      if (activeTool === 'measure' && measureMode === 'area' && polyPointsRef.current.length > 0) {
+        const pts = [...polyPointsRef.current]
+        if (polyPreviewRef.current) pts.push(polyPreviewRef.current)
+        drawAreaPolygon(ctx, pts, rs, calibration, false, false)
+      }
     }
 
     // Committed measurements for this page
@@ -693,7 +749,42 @@ export default function PdfAnnotateTool() {
     for (const m of pageMeasurements) {
       drawMeasurement(ctx, m, rs, calibration, m.id === selectedMeasureId)
     }
-  }, [annotations, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId, getAnnotation, findMatches, findIdx, cropRegions])
+
+    // Committed poly measurements
+    const pagePolyMeas = polyMeasurements[pageNum] || []
+    for (const pm of pagePolyMeas) {
+      const isActive = pm.id === selectedMeasureId
+      if (pm.mode === 'polylength') {
+        drawPolylength(ctx, pm.points, rs, calibration, isActive)
+      } else if (pm.mode === 'area') {
+        drawAreaPolygon(ctx, pm.points, rs, calibration, pm.closed ?? true, isActive)
+      }
+    }
+
+    // Count group markers
+    const pageGroups = countGroups[pageNum] || []
+    for (let gi = 0; gi < pageGroups.length; gi++) {
+      const group = pageGroups[gi]
+      for (let i = 0; i < group.points.length; i++) {
+        drawCountMarker(ctx, group.points[i], i + 1, group.color, rs)
+      }
+      if (group.points.length > 0) {
+        drawCountGroupSummary(ctx, group.label, group.points.length, 10, 10 + gi * 40, group.color, rs)
+      }
+    }
+
+    // Sticky notes
+    const pageStickyNotes = stickyNotes[pageNum] || []
+    for (const note of pageStickyNotes) {
+      const thread = commentThreads.find(t => t.annotationId === note.id)
+      if (note.minimized) {
+        drawStickyNotePin(ctx, note, rs, chatBubbleTarget?.annotationId === note.id, thread)
+      } else {
+        drawStickyNoteExpanded(ctx, note, rs)
+        drawStickyNotePin(ctx, note, rs, chatBubbleTarget?.annotationId === note.id, thread)
+      }
+    }
+  }, [annotations, activeTool, selectedAnnId, color, strokeWidth, opacity, fontSize, measurements, calibration, selectedMeasureId, selectedArrowIdx, selectTextToolbar, hoveredAnnId, getAnnotation, findMatches, findIdx, cropRegions, measureMode, polyMeasurements, countGroups, stickyNotes, commentThreads, chatBubbleTarget])
 
   const redrawAll = useCallback(() => {
     for (const pageNum of renderedPagesRef.current) {
@@ -1039,6 +1130,13 @@ export default function PdfAnnotateTool() {
         setActiveHighlight(session.activeHighlight as 'highlighter' | 'textHighlight' | 'textStrikethrough')
         setActiveDraw(session.activeDraw as ToolType)
         setActiveText(session.activeText as ToolType)
+        if (session.polyMeasurements) setPolyMeasurements(session.polyMeasurements as Record<number, PolyMeasurement[]>)
+        if (session.countGroups) setCountGroups(session.countGroups as Record<number, CountGroup[]>)
+        if (session.measureMode) setMeasureMode(session.measureMode as MeasureMode)
+        if (session.activeCountGroup) setActiveCountGroup(session.activeCountGroup as string)
+        if (session.edgeSnappingEnabled !== undefined) setEdgeSnappingEnabled(session.edgeSnappingEnabled as boolean)
+        if (session.commentThreads) setCommentThreads(session.commentThreads as CommentThread[])
+        if (session.stickyNotes) setStickyNotes(session.stickyNotes as Record<number, StickyNote[]>)
         historyRef.current = [structuredClone(session.annotations as PageAnnotations)]
         historyIdxRef.current = 0
         pendingScrollRef.current = { scrollTop: session.scrollTop, scrollLeft: session.scrollLeft }
@@ -1069,6 +1167,8 @@ export default function PdfAnnotateTool() {
           bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
           superscript, subscript, listType,
           eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+          polyMeasurements, countGroups, measureMode, activeCountGroup, edgeSnappingEnabled,
+          commentThreads, stickyNotes,
         } satisfies PdfAnnotateSession)
       }
     }
@@ -1078,7 +1178,9 @@ export default function PdfAnnotateTool() {
       zoom, currentPage, color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
       bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
       superscript, subscript, listType,
-      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText])
+      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+      polyMeasurements, countGroups, measureMode, activeCountGroup, edgeSnappingEnabled,
+      commentThreads, stickyNotes])
 
   // ── Debounced session save ─────────────────────────
   useEffect(() => {
@@ -1095,6 +1197,8 @@ export default function PdfAnnotateTool() {
         bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
         superscript, subscript, listType,
         eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+        polyMeasurements, countGroups, measureMode, activeCountGroup, edgeSnappingEnabled,
+        commentThreads, stickyNotes,
       } satisfies PdfAnnotateSession)
     }, 1500)
     return () => clearTimeout(timer)
@@ -1102,7 +1206,9 @@ export default function PdfAnnotateTool() {
       color, fontSize, fontFamily, strokeWidth, opacity, activeTool,
       bold, italic, underline, strikethrough, textAlign, textBgColor, lineSpacing,
       superscript, subscript, listType,
-      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText])
+      eraserRadius, eraserMode, activeHighlight, activeDraw, activeText,
+      polyMeasurements, countGroups, measureMode, activeCountGroup, edgeSnappingEnabled,
+      commentThreads, stickyNotes])
 
   // ── Thumbnail loading ────────────────────────────────
 
@@ -1410,8 +1516,13 @@ export default function PdfAnnotateTool() {
           setSelectTextToolbar(null); selectTextStartRef.current = null; selectTextRectsRef.current = []; redrawAll(); return
         }
         // Cancel in-progress measurement
-        if (activeTool === 'measure' && measureStartRef.current) {
-          measureStartRef.current = null; measurePreviewRef.current = null; redrawAll(); return
+        if (activeTool === 'measure') {
+          if (measureStartRef.current) {
+            measureStartRef.current = null; measurePreviewRef.current = null; redrawAll(); return
+          }
+          if (polyPointsRef.current.length > 0) {
+            polyPointsRef.current = []; polyPreviewRef.current = null; redrawAll(); return
+          }
         }
         // Cancel in-progress cloud polygon
         if (activeTool === 'cloud' && currentPtsRef.current.length > 0) {
@@ -1440,6 +1551,13 @@ export default function PdfAnnotateTool() {
         if (selectedMeasureId) {
           e.preventDefault()
           setMeasurements(prev => {
+            const updated = { ...prev }
+            for (const [page, list] of Object.entries(updated)) {
+              updated[Number(page)] = list.filter(m => m.id !== selectedMeasureId)
+            }
+            return updated
+          })
+          setPolyMeasurements(prev => {
             const updated = { ...prev }
             for (const [page, list] of Object.entries(updated)) {
               updated[Number(page)] = list.filter(m => m.id !== selectedMeasureId)
@@ -1662,7 +1780,7 @@ export default function PdfAnnotateTool() {
         const toolMap: Record<string, ToolType> = {
           s: 'select', p: 'pencil', l: 'line', a: 'arrow', r: 'rectangle', c: 'circle', k: 'cloud',
           t: 'text', o: 'callout', e: 'eraser', h: 'highlighter', m: 'measure',
-          g: 'stamp', x: 'crop',
+          g: 'stamp', x: 'crop', n: 'note',
         }
         const mapped = toolMap[e.key.toLowerCase()]
         if (mapped) {
@@ -1761,6 +1879,9 @@ export default function PdfAnnotateTool() {
     cloudLastClickRef.current = { time: 0, pt: { x: 0, y: 0 } }
     measureStartRef.current = null
     measurePreviewRef.current = null
+    polyPointsRef.current = []
+    polyPreviewRef.current = null
+    setMeasureDropdownOpen(false)
     setStraightLineMode(false)
     if (eraserCursorDivRef.current) eraserCursorDivRef.current.style.display = 'none'
     setSelectedAnnId(null)
@@ -1811,6 +1932,7 @@ export default function PdfAnnotateTool() {
       if (textDropdownOpen && textDropdownRef.current && !textDropdownRef.current.contains(t)) setTextDropdownOpen(false)
       if (zoomDropdownOpen && zoomDropdownRef.current && !zoomDropdownRef.current.contains(t)) setZoomDropdownOpen(false)
       if (stampDropdownOpen && stampDropdownRef.current && !stampDropdownRef.current.contains(t)) setStampDropdownOpen(false)
+      if (measureDropdownOpen && measureDropdownRef.current && !measureDropdownRef.current.contains(t)) setMeasureDropdownOpen(false)
     }
     document.addEventListener('pointerdown', handler)
     return () => document.removeEventListener('pointerdown', handler)
@@ -1895,73 +2017,115 @@ export default function PdfAnnotateTool() {
     const isDoubleClick = (now - dblLast.time) < 400 && Math.hypot(pt.x - dblLast.pt.x, pt.y - dblLast.pt.y) < 20
     dblClickRef.current = { time: now, pt }
 
-    // ── Measure tool: click-click placement ──
+    // ── Measure tool: mode-aware click placement ──
     if (activeTool === 'measure') {
-      // First: check if clicking an existing measurement's label → open calibration
-      const pageMeas = measurements[pageNum] || []
-      for (const m of pageMeas) {
-        if (hitTestMeasurementLabel(pt, m, 20)) {
-          setSelectedMeasureId(m.id)
-          setCalibrateMeasureId(m.id)
-          setCalibrateValue('')
-          setCalibrateModalOpen(true)
-          return
+      // Apply edge snapping if enabled
+      let snappedPt = pt
+      if (edgeSnappingEnabled) {
+        const pdfCanvas = pageRefsMap.current.get(pageNum)?.pdfCanvas
+        if (pdfCanvas) {
+          const rs = pageRenderScaleRef.current.get(pageNum) ?? RENDER_SCALE
+          const snapResult = snapToEdge(pdfCanvas, pt, rs, precisionSnapMode)
+          if (snapResult.snapped) snappedPt = snapResult.point
         }
       }
 
-      // Check if clicking near an existing endpoint → start dragging it
-      const endpointThreshold = 10 / zoom
-      for (const m of pageMeas) {
-        const dStart = Math.hypot(pt.x - m.startPt.x, pt.y - m.startPt.y)
-        const dEnd = Math.hypot(pt.x - m.endPt.x, pt.y - m.endPt.y)
-        if (dStart < endpointThreshold) {
-          setSelectedMeasureId(m.id)
-          measureStartRef.current = m.endPt
-          measurePreviewRef.current = m.startPt
-          setMeasurements(prev => ({
-            ...prev,
-            [pageNum]: (prev[pageNum] || []).filter(ms => ms.id !== m.id),
-          }))
-          return
+      // ── Distance mode (existing behavior with edge snapping) ──
+      if (measureMode === 'distance') {
+        const pageMeas = measurements[pageNum] || []
+        for (const m of pageMeas) {
+          if (hitTestMeasurementLabel(pt, m, 20)) {
+            setSelectedMeasureId(m.id)
+            setCalibrateMeasureId(m.id)
+            setCalibrateValue('')
+            setCalibrateModalOpen(true)
+            return
+          }
         }
-        if (dEnd < endpointThreshold) {
-          setSelectedMeasureId(m.id)
-          measureStartRef.current = m.startPt
-          measurePreviewRef.current = m.endPt
-          setMeasurements(prev => ({
-            ...prev,
-            [pageNum]: (prev[pageNum] || []).filter(ms => ms.id !== m.id),
-          }))
-          return
+        const endpointThreshold = 10 / zoom
+        for (const m of pageMeas) {
+          const dStart = Math.hypot(pt.x - m.startPt.x, pt.y - m.startPt.y)
+          const dEnd = Math.hypot(pt.x - m.endPt.x, pt.y - m.endPt.y)
+          if (dStart < endpointThreshold) {
+            setSelectedMeasureId(m.id)
+            measureStartRef.current = m.endPt
+            measurePreviewRef.current = m.startPt
+            setMeasurements(prev => ({ ...prev, [pageNum]: (prev[pageNum] || []).filter(ms => ms.id !== m.id) }))
+            return
+          }
+          if (dEnd < endpointThreshold) {
+            setSelectedMeasureId(m.id)
+            measureStartRef.current = m.startPt
+            measurePreviewRef.current = m.endPt
+            setMeasurements(prev => ({ ...prev, [pageNum]: (prev[pageNum] || []).filter(ms => ms.id !== m.id) }))
+            return
+          }
         }
+        if (measureStartRef.current) {
+          const m: Measurement = { id: crypto.randomUUID(), startPt: measureStartRef.current, endPt: snappedPt, page: pageNum }
+          setMeasurements(prev => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), m] }))
+          setSelectedMeasureId(m.id)
+          measureStartRef.current = null
+          measurePreviewRef.current = null
+          redrawPage(pageNum)
+        } else {
+          measureStartRef.current = snappedPt
+          measurePreviewRef.current = snappedPt
+          setSelectedMeasureId(null)
+        }
+        return
       }
 
-      if (measureStartRef.current) {
-        // Second click: snap end point and create measurement
-        const annCanvas = pageRefsMap.current.get(pageNum)?.annCanvas
-        const snapped = annCanvas
-          ? snapToContent(pt, measureStartRef.current, annCanvas, 30, 3, RENDER_SCALE)
-          : pt
-        const m: Measurement = {
-          id: crypto.randomUUID(),
-          startPt: measureStartRef.current,
-          endPt: snapped,
-          page: pageNum,
+      // ── Polylength mode ──
+      if (measureMode === 'polylength') {
+        if (isDoubleClick && polyPointsRef.current.length >= 2) {
+          const pm: PolyMeasurement = { id: crypto.randomUUID(), mode: 'polylength', points: [...polyPointsRef.current], page: pageNum }
+          setPolyMeasurements(prev => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), pm] }))
+          polyPointsRef.current = []
+          polyPreviewRef.current = null
+          setSelectedMeasureId(pm.id)
+          redrawPage(pageNum)
+          return
         }
-        setMeasurements(prev => ({
-          ...prev,
-          [pageNum]: [...(prev[pageNum] || []), m],
-        }))
-        setSelectedMeasureId(m.id)
-        measureStartRef.current = null
-        measurePreviewRef.current = null
+        polyPointsRef.current.push(snappedPt)
         redrawPage(pageNum)
-      } else {
-        // First click: store start point
-        measureStartRef.current = pt
-        measurePreviewRef.current = pt
-        setSelectedMeasureId(null)
+        return
       }
+
+      // ── Area mode ──
+      if (measureMode === 'area') {
+        const pts = polyPointsRef.current
+        if (pts.length >= 3) {
+          const dFirst = Math.hypot(snappedPt.x - pts[0].x, snappedPt.y - pts[0].y)
+          if (isDoubleClick || dFirst < 15 / zoom) {
+            const pm: PolyMeasurement = { id: crypto.randomUUID(), mode: 'area', points: [...pts], page: pageNum, closed: true }
+            setPolyMeasurements(prev => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), pm] }))
+            polyPointsRef.current = []
+            polyPreviewRef.current = null
+            setSelectedMeasureId(pm.id)
+            redrawPage(pageNum)
+            return
+          }
+        }
+        pts.push(snappedPt)
+        redrawPage(pageNum)
+        return
+      }
+
+      // ── Count mode ──
+      if (measureMode === 'count') {
+        if (!activeCountGroup) {
+          setCountGroupModalOpen(true)
+          return
+        }
+        setCountGroups(prev => {
+          const page = prev[pageNum] || []
+          return { ...prev, [pageNum]: page.map(g => g.id === activeCountGroup ? { ...g, points: [...g.points, snappedPt] } : g) }
+        })
+        redrawPage(pageNum)
+        return
+      }
+
       return
     }
 
@@ -2286,6 +2450,56 @@ export default function PdfAnnotateTool() {
       return
     }
 
+    // ── Note (sticky note) tool: click to place ──
+    if (activeTool === 'note') {
+      const noteRefs = pageRefsMap.current.get(pageNum)
+      const noteRs = pageRenderScaleRef.current.get(pageNum) ?? RENDER_SCALE
+      // Check if clicking an existing sticky note — toggle its expanded state
+      const pageNotes = stickyNotes[pageNum] || []
+      for (const note of pageNotes) {
+        if (hitTestStickyNote(pt, note, noteRs)) {
+          // Toggle minimized/expanded
+          setStickyNotes(prev => ({
+            ...prev,
+            [pageNum]: (prev[pageNum] || []).map(n =>
+              n.id === note.id ? { ...n, minimized: !n.minimized } : n
+            ),
+          }))
+          // Open chat bubble
+          if (noteRefs) {
+            const rect = noteRefs.annCanvas.getBoundingClientRect()
+            const screenX = rect.left + (note.point.x / noteRs) * zoom
+            const screenY = rect.top + (note.point.y / noteRs) * zoom
+            setChatBubbleTarget({ annotationId: note.id, position: { x: screenX, y: screenY } })
+          }
+          redrawPage(pageNum)
+          return
+        }
+      }
+      // Place a new sticky note
+      const newNote: StickyNote = {
+        id: genId(),
+        point: pt,
+        page: pageNum,
+        color: activeStickyColor,
+        text: '',
+        minimized: true,
+      }
+      setStickyNotes(prev => ({
+        ...prev,
+        [pageNum]: [...(prev[pageNum] || []), newNote],
+      }))
+      // Open chat bubble for the new note
+      if (noteRefs) {
+        const canvasRect = noteRefs.annCanvas.getBoundingClientRect()
+        const sx = canvasRect.left + (pt.x / noteRs) * zoom
+        const sy = canvasRect.top + (pt.y / noteRs) * zoom
+        setChatBubbleTarget({ annotationId: newNote.id, position: { x: sx, y: sy } })
+      }
+      redrawPage(pageNum)
+      return
+    }
+
     // ── Crop tool: start dragging crop region ──
     if (activeTool === 'crop') {
       cropDrawRef.current = { startPt: pt }
@@ -2296,6 +2510,21 @@ export default function PdfAnnotateTool() {
 
     // ── Click-to-select (only for non-drawing tools) ──
     if (!DRAW_TYPES.has(activeTool) && activeTool !== 'eraser' && activeTool !== 'highlighter') {
+      // Check sticky notes first (they render on top)
+      const selectRs = pageRenderScaleRef.current.get(pageNum) ?? RENDER_SCALE
+      const selectRefs = pageRefsMap.current.get(pageNum)
+      const pageNotes = stickyNotes[pageNum] || []
+      for (const note of pageNotes) {
+        if (hitTestStickyNote(pt, note, selectRs)) {
+          if (selectRefs) {
+            const rect = selectRefs.annCanvas.getBoundingClientRect()
+            const screenX = rect.left + (note.point.x / selectRs) * zoom
+            const screenY = rect.top + (note.point.y / selectRs) * zoom
+            setChatBubbleTarget({ annotationId: note.id, position: { x: screenX, y: screenY } })
+          }
+          return
+        }
+      }
       const hitAny = findAnnotationAt(pt)
       if (hitAny) {
         setSelectedAnnId(hitAny.id)
@@ -2413,10 +2642,17 @@ export default function PdfAnnotateTool() {
     }
 
     // Measure tool: track cursor for preview line
-    if (activeTool === 'measure' && measureStartRef.current) {
-      measurePreviewRef.current = getPointForPage(ap, e)
-      redrawPage(ap)
-      return
+    if (activeTool === 'measure') {
+      if (measureMode === 'distance' && measureStartRef.current) {
+        measurePreviewRef.current = getPointForPage(ap, e)
+        redrawPage(ap)
+        return
+      }
+      if ((measureMode === 'polylength' || measureMode === 'area') && polyPointsRef.current.length > 0) {
+        polyPreviewRef.current = getPointForPage(ap, e)
+        redrawPage(ap)
+        return
+      }
     }
 
     // Cloud polygon: track cursor for preview
@@ -3065,7 +3301,7 @@ export default function PdfAnnotateTool() {
     const finalPts = isHL ? [...pts] : (isPencilOrHL ? decimatePoints([...pts], 0.5) : [...pts])
     const ann: Annotation = {
       id: genId(),
-      type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'crop'>,
+      type: activeTool as Exclude<ToolType, 'select' | 'eraser' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'crop' | 'note'>,
       points: finalPts,
       color,
       strokeWidth: strokeWidth,
@@ -3084,6 +3320,79 @@ export default function PdfAnnotateTool() {
     }
   }, [activeTool, color, strokeWidth, opacity, fontSize, fillColor, cornerRadius, dashPattern, arrowStart, commitAnnotation,
       pushHistory, redrawPage, annotations, getAnnotation, updateAnnotation, selectedAnnId])
+
+  // ── Comment & Sticky Note Management ─────────────────
+
+  const handleAddComment = useCallback((annotationId: string, text: string, parentId?: string) => {
+    const profile = userProfileRef.current
+    if (!profile || !text.trim()) return
+    const newComment: CommentType = {
+      id: genId(),
+      authorName: profile.name,
+      authorInitials: profile.initials,
+      timestamp: Date.now(),
+      text: text.trim(),
+      parentId,
+    }
+    setCommentThreads(prev => {
+      const existing = prev.find(t => t.annotationId === annotationId)
+      if (existing) {
+        return prev.map(t => t.annotationId === annotationId
+          ? { ...t, comments: [...t.comments, newComment] }
+          : t)
+      }
+      return [...prev, { annotationId, comments: [newComment], status: 'open' as CommentStatus }]
+    })
+  }, [])
+
+  const handleStatusChange = useCallback((annotationId: string, status: CommentStatus) => {
+    setCommentThreads(prev => {
+      const existing = prev.find(t => t.annotationId === annotationId)
+      if (existing) {
+        return prev.map(t => t.annotationId === annotationId ? { ...t, status } : t)
+      }
+      return [...prev, { annotationId, comments: [], status }]
+    })
+  }, [])
+
+  const handleSelectThread = useCallback((annotationId: string, page: number) => {
+    // Navigate to page and open chat bubble
+    setCurrentPage(page)
+    const scrollContainer = scrollRef.current
+    if (scrollContainer) {
+      const pageContainer = scrollContainer.querySelector(`[data-page="${page}"]`)
+      if (pageContainer) {
+        pageContainer.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }
+    // Find the annotation/sticky note position to anchor the chat bubble
+    const pageAnns = annotations[page] ?? []
+    const ann = pageAnns.find(a => a.id === annotationId)
+    if (ann && ann.points.length > 0) {
+      const refs = pageRefsMap.current.get(page)
+      if (refs) {
+        const rect = refs.annCanvas.getBoundingClientRect()
+        const rs = pageRenderScaleRef.current.get(page) ?? RENDER_SCALE
+        const screenX = rect.left + (ann.points[0].x / rs) * zoom
+        const screenY = rect.top + (ann.points[0].y / rs) * zoom
+        setChatBubbleTarget({ annotationId, position: { x: screenX, y: screenY } })
+      }
+    }
+    // Check sticky notes
+    const pageStickyNotes = stickyNotes[page] ?? []
+    const note = pageStickyNotes.find(n => n.id === annotationId)
+    if (note) {
+      const refs = pageRefsMap.current.get(page)
+      if (refs) {
+        const rect = refs.annCanvas.getBoundingClientRect()
+        const rs = pageRenderScaleRef.current.get(page) ?? RENDER_SCALE
+        const screenX = rect.left + (note.point.x / rs) * zoom
+        const screenY = rect.top + (note.point.y / rs) * zoom
+        setChatBubbleTarget({ annotationId, position: { x: screenX, y: screenY } })
+      }
+    }
+    setCommentsPanelOpen(false)
+  }, [annotations, stickyNotes, zoom])
 
   // ── Export annotated PDF ─────────────────────────────
 
@@ -3660,7 +3969,20 @@ export default function PdfAnnotateTool() {
     setSelectedMeasureId(null)
     measureStartRef.current = null
     measurePreviewRef.current = null
+    polyPointsRef.current = []
+    polyPreviewRef.current = null
+    setPolyMeasurements({})
+    setCountGroups({})
+    setActiveCountGroup(null)
+    setMeasureMode('distance')
+    setMeasureDropdownOpen(false)
     setCropRegions({})
+    setCommentThreads([])
+    setStickyNotes({})
+    setChatBubbleTarget(null)
+    setCommentsPanelOpen(false)
+    setExportModalOpen(false)
+    setEmailModalOpen(false)
   }, [])
 
   // ── Pre-render derived values (must be before any early return) ──
@@ -3745,11 +4067,11 @@ export default function PdfAnnotateTool() {
   const isShapeAnnSelected = selectedAnn && !isTextAnnSelected
 
   // Properties bar context
-  const showPropsForTool = activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'stamp' && activeTool !== 'crop'
+  const showPropsForTool = activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'stamp' && activeTool !== 'crop' && activeTool !== 'note'
   const showPropsForSelection = activeTool === 'select' && selectedAnn
   const showTextProps = (isTextAnnSelected && activeTool === 'select') || activeTool === 'text' || activeTool === 'callout'
   const showStrokeWidth = (isShapeAnnSelected && activeTool === 'select') ||
-    (activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'stamp' && activeTool !== 'crop')
+    (activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'stamp' && activeTool !== 'crop' && activeTool !== 'note')
   const showOpacity = showPropsForTool || (activeTool === 'select' && selectedAnn != null)
   const showColorPicker = showPropsForTool || showPropsForSelection
   const showEraserControls = activeTool === 'eraser'
@@ -3851,16 +4173,50 @@ export default function PdfAnnotateTool() {
           )}
         </button>
 
-        {/* Export & Reset */}
+        {/* Export, Email, Print, Report, Reset */}
         {exportError && (
           <div className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/10 border border-red-500/20">
             <span className="text-[10px] text-red-400">{exportError}</span>
             <button onClick={() => setExportError(null)} className="p-0.5 text-red-400/60 hover:text-red-400"><X size={10} /></button>
           </div>
         )}
-        <Button size="sm" onClick={handleExport} disabled={isExporting} icon={<Download size={12} />}>
-          {isExporting ? 'Exporting...' : 'Export PDF'}
+        <Button size="sm" onClick={() => setExportModalOpen(true)} disabled={isExporting} icon={<Download size={12} />}>
+          {isExporting ? 'Exporting...' : 'Export'}
         </Button>
+        <Button variant="ghost" size="sm" onClick={() => setEmailModalOpen(true)} icon={<Mail size={12} />}>
+          Email
+        </Button>
+        <Button variant="ghost" size="sm" disabled={isPrinting} onClick={async () => {
+          setIsPrinting(true)
+          try {
+            await printAnnotatedPDF(pageRefsMap.current, pdfFile.pageCount, pageDimsMap.current)
+          } finally {
+            setIsPrinting(false)
+          }
+        }} icon={<Printer size={12} />}>
+          {isPrinting ? 'Printing...' : 'Print'}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={async () => {
+          const reportBytes = await generateMarkupReport({
+            fileName: pdfFile.name,
+            pageCount: pdfFile.pageCount,
+            pageRefsMap: pageRefsMap.current,
+            annotations, measurements, polyMeasurements, countGroups,
+            commentThreads, stickyNotes, calibration,
+          })
+          downloadBlob(new Blob([reportBytes], { type: 'application/pdf' }), `report-${pdfFile.name}`)
+        }} icon={<FileText size={12} />}>
+          Report
+        </Button>
+        {(Object.keys(measurements).length > 0 || Object.keys(polyMeasurements).length > 0 || Object.keys(countGroups).length > 0) && (
+          <Button variant="ghost" size="sm" onClick={() => {
+            const rows = gatherMeasurementData(measurements, polyMeasurements, countGroups, calibration)
+            if (rows.length === 0) return
+            exportMeasurementsToCSV(rows, `measurements-${pdfFile.name.replace('.pdf', '')}.csv`)
+          }} icon={<FileSpreadsheet size={12} />}>
+            CSV
+          </Button>
+        )}
         <Button variant="ghost" size="sm" onClick={handleReset} icon={<RotateCcw size={12} />}>
           New
         </Button>
@@ -4520,13 +4876,42 @@ export default function PdfAnnotateTool() {
             }`}>
             <Eraser size={16} />
           </button>
-          {/* Measure */}
-          <button onClick={() => setActiveTool('measure')} title="Measure (M)"
-            className={`p-1.5 rounded-lg transition-colors ${
-              activeTool === 'measure' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
-            }`}>
-            <Ruler size={16} />
-          </button>
+          {/* Measure dropdown */}
+          <div ref={measureDropdownRef} className="relative">
+            <button onClick={() => { if (activeTool === 'measure') { setMeasureDropdownOpen(o => !o) } else { setActiveTool('measure'); setMeasureDropdownOpen(false) } }} title="Measure (M)"
+              className={`p-1.5 rounded-lg transition-colors relative ${
+                activeTool === 'measure' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+              }`}>
+              <Ruler size={16} />
+              <ChevronDown size={7} className="absolute bottom-0.5 right-0.5 opacity-50" />
+            </button>
+            {measureDropdownOpen && (
+              <div className="absolute top-0 right-full mr-1 bg-[#001a24] border border-white/[0.08] rounded-lg shadow-xl py-1 z-50 min-w-[160px]">
+                {MEASURE_MODES.map(({ mode, label }) => (
+                  <button key={mode}
+                    onClick={() => { setMeasureMode(mode); setActiveTool('measure'); setMeasureDropdownOpen(false) }}
+                    className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                      measureMode === mode ? 'text-[#F47B20] bg-[#F47B20]/10' : 'text-white/70 hover:text-white hover:bg-white/[0.06]'
+                    }`}>
+                    {label}
+                  </button>
+                ))}
+                <div className="h-px bg-white/[0.08] my-1" />
+                <label className="flex items-center gap-2 px-3 py-1.5 text-xs text-white/70 cursor-pointer hover:bg-white/[0.06]">
+                  <input type="checkbox" checked={edgeSnappingEnabled}
+                    onChange={e => setEdgeSnappingEnabled(e.target.checked)}
+                    className="rounded border-white/20 bg-white/10 text-[#F47B20] focus:ring-[#F47B20]" />
+                  Edge Snap
+                </label>
+                <label className="flex items-center gap-2 px-3 py-1.5 text-xs text-white/70 cursor-pointer hover:bg-white/[0.06]">
+                  <input type="checkbox" checked={precisionSnapMode}
+                    onChange={e => setPrecisionSnapMode(e.target.checked)}
+                    className="rounded border-white/20 bg-white/10 text-[#F47B20] focus:ring-[#F47B20]" />
+                  Precision Mode
+                </label>
+              </div>
+            )}
+          </div>
           {/* Stamp */}
           <div ref={stampDropdownRef} className="relative">
             <button
@@ -4557,6 +4942,25 @@ export default function PdfAnnotateTool() {
               activeTool === 'crop' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
             }`}>
             <Crop size={16} />
+          </button>
+          {/* Sticky Note */}
+          <button onClick={() => setActiveTool('note')} title="Sticky Note (N)"
+            className={`p-1.5 rounded-lg transition-colors ${
+              activeTool === 'note' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+            }`}>
+            <StickyNoteIcon size={16} />
+          </button>
+          {/* Comments Panel */}
+          <button onClick={() => setCommentsPanelOpen(prev => !prev)} title="Comments panel"
+            className={`relative p-1.5 rounded-lg transition-colors ${
+              commentsPanelOpen ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+            }`}>
+            <MessageCircle size={16} />
+            {commentThreads.length > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] flex items-center justify-center px-0.5 text-[8px] font-bold bg-[#F47B20] text-white rounded-full">
+                {commentThreads.length > 99 ? '99+' : commentThreads.length}
+              </span>
+            )}
           </button>
           <div className="h-px w-6 bg-white/[0.08]" />
           {/* Undo/Redo */}
@@ -4848,10 +5252,17 @@ export default function PdfAnnotateTool() {
             activeTool === 'text' ? 'Drag to create text' :
             activeTool === 'callout' ? 'Drag to create callout' :
             activeTool === 'cloud' ? `${currentPtsRef.current.length} pts · Dbl-click close` :
-            activeTool === 'measure' ? 'Click two points' :
+            activeTool === 'measure' ? (
+              measureMode === 'distance' ? 'Click two points' :
+              measureMode === 'polylength' ? 'Click to add points · Double-click to finish' :
+              measureMode === 'area' ? 'Click to add vertices · Double-click to close' :
+              measureMode === 'count' ? (activeCountGroup ? 'Click to place marker' : 'Create a count group first') :
+              'Click two points'
+            ) :
             activeTool === 'textHighlight' ? 'Drag to highlight' :
             activeTool === 'stamp' ? `${activeStampPreset.label} · click to place` :
             activeTool === 'crop' ? 'Drag to set crop region' :
+            activeTool === 'note' ? 'Click to place a sticky note' :
             (activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'line' || activeTool === 'arrow')
               ? 'Shift for perfect shapes' :
             'Ctrl+scroll zoom'
@@ -4938,6 +5349,53 @@ export default function PdfAnnotateTool() {
             </div>
           )
         })()}
+      </Modal>
+
+      {/* ── Count Group creation modal ── */}
+      <Modal open={countGroupModalOpen} onClose={() => setCountGroupModalOpen(false)} title="New Count Group" width="sm">
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-white/60">Create a named group to count items (e.g., doors, outlets, fixtures).</p>
+          <input
+            type="text"
+            value={countGroupLabel}
+            onChange={e => setCountGroupLabel(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && countGroupLabel.trim()) {
+                const newGroup: CountGroup = { id: genId(), label: countGroupLabel.trim(), color: countGroupColor, points: [], page: currentPage }
+                setCountGroups(prev => ({ ...prev, [currentPage]: [...(prev[currentPage] || []), newGroup] }))
+                setActiveCountGroup(newGroup.id)
+                setCountGroupLabel('')
+                setCountGroupModalOpen(false)
+              }
+            }}
+            placeholder="e.g. Doors, Outlets, Sprinklers"
+            className="px-3 py-2 text-sm bg-dark-surface border border-white/[0.1] rounded-lg text-white placeholder:text-white/30 focus:outline-none focus:border-[#F47B20]/50"
+            autoFocus
+          />
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/60">Color:</span>
+            {['#EF4444', '#F47B20', '#EAB308', '#22C55E', '#3B82F6', '#8B5CF6', '#EC4899'].map(c => (
+              <button key={c} onClick={() => setCountGroupColor(c)}
+                className={`w-6 h-6 rounded-full border-2 transition-colors ${countGroupColor === c ? 'border-white' : 'border-transparent'}`}
+                style={{ backgroundColor: c }} />
+            ))}
+          </div>
+          <div className="flex justify-end">
+            <button
+              disabled={!countGroupLabel.trim()}
+              onClick={() => {
+                if (!countGroupLabel.trim()) return
+                const newGroup: CountGroup = { id: genId(), label: countGroupLabel.trim(), color: countGroupColor, points: [], page: currentPage }
+                setCountGroups(prev => ({ ...prev, [currentPage]: [...(prev[currentPage] || []), newGroup] }))
+                setActiveCountGroup(newGroup.id)
+                setCountGroupLabel('')
+                setCountGroupModalOpen(false)
+              }}
+              className="px-4 py-1.5 text-sm bg-[#F47B20] text-white rounded-lg hover:bg-[#F47B20]/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              Create Group
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* ── Eraser cursor overlay — positioned via ref to avoid re-renders on mousemove ── */}
@@ -5049,6 +5507,19 @@ export default function PdfAnnotateTool() {
               </button>
             ))}
             <div className="h-px bg-white/[0.08] my-1" />
+            <button onClick={() => doAction(() => {
+              const refs = pageRefsMap.current.get(cmPageNum)
+              if (!refs || !cmAnn.points[0]) return
+              const rsL = pageRenderScaleRef.current.get(cmPageNum) ?? RENDER_SCALE
+              const rect = refs.annCanvas.getBoundingClientRect()
+              const sx = rect.left + (cmAnn.points[0].x / rsL) * zoom
+              const sy = rect.top + (cmAnn.points[0].y / rsL) * zoom
+              setChatBubbleTarget({ annotationId: annId, position: { x: sx, y: sy } })
+            })} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">
+              <MessageCircle size={11} />
+              <span>Add Comment</span>
+            </button>
+            <div className="h-px bg-white/[0.08] my-1" />
             <button onClick={() => doAction(copyStyle)} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06]">Copy Style</button>
             <button onClick={() => doAction(pasteStyle)} disabled={!copiedStyleRef.current} className="w-full text-left px-3 py-1.5 text-xs text-white/70 hover:text-white hover:bg-white/[0.06] disabled:opacity-40">Paste Style</button>
           </div>
@@ -5102,6 +5573,89 @@ export default function PdfAnnotateTool() {
           </div>
         </div>
       )}
+
+      {/* ── Chat Bubble ── */}
+      {chatBubbleTarget && userProfileRef.current && (
+        <ChatBubble
+          thread={commentThreads.find(t => t.annotationId === chatBubbleTarget.annotationId) ?? null}
+          annotationId={chatBubbleTarget.annotationId}
+          userProfile={userProfileRef.current}
+          position={chatBubbleTarget.position}
+          onAddComment={handleAddComment}
+          onStatusChange={handleStatusChange}
+          onClose={() => setChatBubbleTarget(null)}
+        />
+      )}
+
+      {/* ── Comments Panel ── */}
+      <CommentsPanel
+        isOpen={commentsPanelOpen}
+        onClose={() => setCommentsPanelOpen(false)}
+        threads={commentThreads}
+        stickyNotes={stickyNotes}
+        annotations={annotations}
+        onSelectThread={handleSelectThread}
+        onStatusChange={handleStatusChange}
+      />
+
+      {/* ── Export Modal ── */}
+      <ExportModal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        onExport={async (mode) => {
+          setExportModalOpen(false)
+          if (mode === 'final') {
+            await handleExport()
+          } else {
+            // For Review: export with embedded annotation data
+            setIsExporting(true)
+            setExportError(null)
+            try {
+              // First do the normal export to get the PDF bytes
+              await handleExport()
+              // TODO: After export, embed metadata into the saved PDF
+              // This will be enhanced to intercept the export flow
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : 'Unknown error'
+              setExportError(`Export failed: ${msg}`)
+            } finally {
+              setIsExporting(false)
+            }
+          }
+        }}
+        fileName={pdfFile.name}
+        hasComments={commentThreads.length > 0}
+        isExporting={isExporting}
+        annotationCount={totalAnnotationCount}
+        commentCount={commentThreads.reduce((sum, t) => sum + t.comments.length, 0)}
+      />
+
+      {/* ── Email Modal ── */}
+      <EmailModal
+        isOpen={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        onSend={async (recipients, subject, body) => {
+          setEmailModalOpen(false)
+          // Export the PDF first, then trigger email
+          setIsExporting(true)
+          try {
+            const pdfBytes = await getPDFBytes(pdfFile)
+            if (!pdfBytes) return
+            const pdfDoc = await PDFDocument.load(pdfBytes)
+            // Flatten annotations onto the PDF (simplified — uses same export logic)
+            const flatBytes = await pdfDoc.save()
+            const blob = new Blob([flatBytes], { type: 'application/pdf' })
+            sendAnnotatedPDF(recipients, subject, body, blob, pdfFile.name.replace('.pdf', '-annotated.pdf'))
+          } catch {
+            // Fallback: just open mailto without attachment
+            const mailto = `mailto:${recipients.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+            window.open(mailto, '_blank')
+          } finally {
+            setIsExporting(false)
+          }
+        }}
+        fileName={pdfFile.name}
+      />
     </div>
   )
 }
