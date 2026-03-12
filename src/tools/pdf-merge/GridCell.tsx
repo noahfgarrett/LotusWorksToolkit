@@ -1,0 +1,310 @@
+import { useState, useRef, useCallback, useEffect, memo } from 'react'
+import { ZoomIn, ZoomOut, X, Maximize2 } from 'lucide-react'
+
+/* ── Types ── */
+
+export interface GridCellData {
+  id: string
+  label: string
+  file: File | null
+  type: 'pdf' | 'image' | null
+  thumbnail: string | null
+  nativeWidth: number
+  nativeHeight: number
+  offsetX: number
+  offsetY: number
+  scale: number // 1.0 = contain-fit, >1 zooms in
+}
+
+interface GridCellProps {
+  cell: GridCellData
+  isSelected: boolean
+  cellWidth: number
+  cellHeight: number
+  onSelect: () => void
+  onUpdateOffset: (offsetX: number, offsetY: number) => void
+  onUpdateScale: (scale: number) => void
+  onSwapStart: (cellId: string) => void
+  onSwapDrop: (targetCellId: string) => void
+  onContextMenu: (e: React.MouseEvent) => void
+  onFocus: () => void
+  onUpdateLabel: (label: string) => void
+}
+
+/* ── Constants ── */
+
+const MIN_SCALE = 0.1
+const MAX_SCALE = 10
+const SCROLL_STEP = 0.05
+
+/* ── Component ── */
+
+export const GridCell = memo(function GridCell({
+  cell,
+  isSelected,
+  cellWidth,
+  cellHeight,
+  onSelect,
+  onUpdateOffset,
+  onUpdateScale,
+  onSwapStart,
+  onSwapDrop,
+  onContextMenu,
+  onFocus,
+  onUpdateLabel,
+}: GridCellProps) {
+  const dragRef = useRef<{
+    startX: number
+    startY: number
+    startOffsetX: number
+    startOffsetY: number
+  } | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const cellRef = useRef<HTMLDivElement>(null)
+
+  // Stable refs for wheel handler
+  const scaleRef = useRef(cell.scale)
+  scaleRef.current = cell.scale
+  const isSelectedRef = useRef(isSelected)
+  isSelectedRef.current = isSelected
+  const hasContentRef = useRef(false)
+  const onUpdateScaleRef = useRef(onUpdateScale)
+  onUpdateScaleRef.current = onUpdateScale
+
+  // Calculate contain-fit base dimensions, then apply cell scale
+  const hasContent = cell.file !== null && cell.thumbnail !== null
+  hasContentRef.current = hasContent
+  let displayW = 0
+  let displayH = 0
+  let contentLeft = 0
+  let contentTop = 0
+
+  if (hasContent && cell.nativeWidth > 0 && cell.nativeHeight > 0) {
+    const fitScaleX = cellWidth / cell.nativeWidth
+    const fitScaleY = cellHeight / cell.nativeHeight
+    const fitScale = Math.min(fitScaleX, fitScaleY)
+    const baseW = cell.nativeWidth * fitScale
+    const baseH = cell.nativeHeight * fitScale
+    displayW = baseW * cell.scale
+    displayH = baseH * cell.scale
+    // Center the scaled content
+    contentLeft = (cellWidth - displayW) / 2
+    contentTop = (cellHeight - displayH) / 2
+  }
+
+  /* ── Pointer drag for content nudging ── */
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (!hasContent) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startOffsetX: cell.offsetX,
+      startOffsetY: cell.offsetY,
+    }
+    contentRef.current?.setPointerCapture(e.pointerId)
+  }, [hasContent, cell.offsetX, cell.offsetY])
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return
+    const dx = e.clientX - dragRef.current.startX
+    const dy = e.clientY - dragRef.current.startY
+    onUpdateOffset(dragRef.current.startOffsetX + dx, dragRef.current.startOffsetY + dy)
+  }, [onUpdateOffset])
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return
+    contentRef.current?.releasePointerCapture(e.pointerId)
+    dragRef.current = null
+  }, [])
+
+  /* ── Scroll wheel zoom (native listener for passive: false) ── */
+
+  useEffect(() => {
+    const el = cellRef.current
+    if (!el) return
+    const handler = (e: WheelEvent) => {
+      if (!hasContentRef.current || !isSelectedRef.current) return
+      e.preventDefault()
+      e.stopPropagation()
+      const delta = e.deltaY < 0 ? SCROLL_STEP : -SCROLL_STEP
+      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scaleRef.current + delta))
+      onUpdateScaleRef.current(newScale)
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [])
+
+  /* ── Label badge drag for cell swapping ── */
+
+  const handleLabelDragStart = useCallback((e: React.DragEvent) => {
+    e.dataTransfer.setData('text/plain', cell.id)
+    e.dataTransfer.effectAllowed = 'move'
+    onSwapStart(cell.id)
+  }, [cell.id, onSwapStart])
+
+  const handleCellDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }, [])
+
+  const handleCellDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    const sourceId = e.dataTransfer.getData('text/plain')
+    if (sourceId && sourceId !== cell.id) {
+      onSwapDrop(cell.id)
+    }
+  }, [cell.id, onSwapDrop])
+
+  /* ── Label editing ── */
+
+  const [isEditingLabel, setIsEditingLabel] = useState(false)
+  const [editLabelValue, setEditLabelValue] = useState(cell.label)
+  const labelInputRef = useRef<HTMLInputElement>(null)
+
+  // Sync external label changes
+  useEffect(() => { setEditLabelValue(cell.label) }, [cell.label])
+
+  useEffect(() => {
+    if (isEditingLabel) labelInputRef.current?.select()
+  }, [isEditingLabel])
+
+  const commitLabel = useCallback(() => {
+    const trimmed = editLabelValue.trim()
+    if (trimmed && trimmed !== cell.label) onUpdateLabel(trimmed)
+    else setEditLabelValue(cell.label)
+    setIsEditingLabel(false)
+  }, [editLabelValue, cell.label, onUpdateLabel])
+
+  const hasOffset = cell.offsetX !== 0 || cell.offsetY !== 0
+  const isZoomed = cell.scale !== 1
+
+  return (
+    <div
+      ref={cellRef}
+      className={`
+        relative overflow-hidden
+        ${isSelected ? 'ring-2 ring-[#F47B20] z-10' : ''}
+      `}
+      style={{
+        width: cellWidth,
+        height: cellHeight,
+        backgroundColor: hasContent ? 'var(--color-dark-base, #00171F)' : '#ffffff',
+      }}
+      onClick={(e) => { e.stopPropagation(); onSelect() }}
+      onContextMenu={onContextMenu}
+      onDragOver={handleCellDragOver}
+      onDrop={handleCellDrop}
+    >
+      {/* Content */}
+      {hasContent ? (
+        <div
+          ref={contentRef}
+          className="absolute cursor-grab active:cursor-grabbing touch-none"
+          style={{
+            left: contentLeft + cell.offsetX,
+            top: contentTop + cell.offsetY,
+            width: displayW,
+            height: displayH,
+          }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        >
+          <img
+            src={cell.thumbnail!}
+            alt={cell.label}
+            className="w-full h-full object-contain select-none pointer-events-none"
+            draggable={false}
+          />
+        </div>
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-xs text-black/20 font-medium">Empty</span>
+        </div>
+      )}
+
+      {/* Label badge (top-left) — draggable for swapping, double-click to edit */}
+      {isEditingLabel ? (
+        <input
+          ref={labelInputRef}
+          value={editLabelValue}
+          onChange={(e) => setEditLabelValue(e.target.value)}
+          onBlur={commitLabel}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitLabel()
+            if (e.key === 'Escape') { setEditLabelValue(cell.label); setIsEditingLabel(false) }
+            e.stopPropagation()
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-1.5 left-1.5 px-1 py-0 rounded text-[10px] font-bold z-20 bg-white text-black border border-[#F47B20] outline-none w-16"
+          maxLength={10}
+        />
+      ) : (
+        <div
+          draggable={hasContent}
+          onDragStart={handleLabelDragStart}
+          onDoubleClick={(e) => { e.stopPropagation(); setIsEditingLabel(true) }}
+          className={`
+            absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold z-20
+            ${hasContent ? 'cursor-grab bg-black/60 text-white/80' : 'bg-black/10 text-black/30'}
+          `}
+          title={hasContent ? 'Drag to swap · Double-click to rename' : 'Double-click to rename'}
+        >
+          {cell.label}
+        </div>
+      )}
+
+      {/* Zoom controls — visible when selected and has content */}
+      {isSelected && hasContent && (
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 z-20">
+          <button
+            onClick={(e) => { e.stopPropagation(); onFocus() }}
+            className="p-1 rounded bg-[#F47B20]/80 text-white hover:bg-[#F47B20] transition-colors mr-1"
+            title="Focus edit mode"
+          >
+            <Maximize2 size={12} />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onUpdateScale(Math.max(MIN_SCALE, cell.scale - 0.1)) }}
+            className="p-1 rounded bg-black/60 text-white/70 hover:text-white transition-colors"
+            title="Zoom out"
+          >
+            <ZoomOut size={12} />
+          </button>
+          <span className="text-[9px] text-white/60 bg-black/60 px-1 py-0.5 rounded min-w-[32px] text-center">
+            {Math.round(cell.scale * 100)}%
+          </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onUpdateScale(Math.min(MAX_SCALE, cell.scale + 0.1)) }}
+            className="p-1 rounded bg-black/60 text-white/70 hover:text-white transition-colors"
+            title="Zoom in"
+          >
+            <ZoomIn size={12} />
+          </button>
+          {(isZoomed || hasOffset) && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onUpdateScale(1); onUpdateOffset(0, 0) }}
+              className="p-1 rounded bg-black/60 text-white/70 hover:text-white transition-colors"
+              title="Reset zoom and position"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Info overlay (bottom-right) when selected */}
+      {isSelected && hasContent && (hasOffset || isZoomed) && (
+        <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded text-[10px] bg-black/60 text-white/60 z-20 pointer-events-none">
+          {isZoomed && <span>{Math.round(cell.scale * 100)}%</span>}
+          {isZoomed && hasOffset && <span> · </span>}
+          {hasOffset && <span>x: {cell.offsetX > 0 ? '+' : ''}{Math.round(cell.offsetX)}, y: {cell.offsetY > 0 ? '+' : ''}{Math.round(cell.offsetY)}</span>}
+        </div>
+      )}
+    </div>
+  )
+})

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, lazy, Suspense } from 'react'
 import { FileDropZone } from '@/components/common/FileDropZone.tsx'
 import { Button } from '@/components/common/Button.tsx'
 import { ProgressBar } from '@/components/common/ProgressBar.tsx'
@@ -17,6 +17,8 @@ import {
   Download, Trash2, GripVertical, Plus, ArrowUp, ArrowDown,
   ChevronDown, ChevronRight, Loader2, Eye, EyeOff, ZoomIn, ZoomOut, Copy,
 } from 'lucide-react'
+
+const GridStitchMode = lazy(() => import('./GridStitchMode.tsx'))
 
 /* ── Types ── */
 
@@ -173,7 +175,10 @@ function SortablePageItem({
 
 /* ── Component ── */
 
+type MergeMode = 'merge' | 'gridStitch'
+
 export default function PdfMergeTool() {
+  const [mode, setMode] = useState<MergeMode>('merge')
   const [files, setFiles] = useState<MergeFile[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isMerging, setIsMerging] = useState(false)
@@ -565,11 +570,56 @@ export default function PdfMergeTool() {
     if (droppedFiles.length > 0) handleFiles(droppedFiles)
   }, [handleFiles])
 
-  /* ── Render: empty state ── */
+  /* ── Tab bar (shared across modes) ── */
+
+  const tabBar = (
+    <div className="flex items-center gap-1 flex-shrink-0">
+      <button
+        onClick={() => setMode('merge')}
+        className={`
+          px-4 py-1.5 text-sm font-medium rounded-md transition-all
+          ${mode === 'merge'
+            ? 'bg-[#F47B20] text-white shadow-md shadow-[#F47B20]/20'
+            : 'bg-white/[0.04] text-white/50 hover:text-white/70 hover:bg-white/[0.08]'
+          }
+        `}
+      >
+        Merge
+      </button>
+      <button
+        onClick={() => setMode('gridStitch')}
+        className={`
+          px-4 py-1.5 text-sm font-medium rounded-md transition-all
+          ${mode === 'gridStitch'
+            ? 'bg-[#F47B20] text-white shadow-md shadow-[#F47B20]/20'
+            : 'bg-white/[0.04] text-white/50 hover:text-white/70 hover:bg-white/[0.08]'
+          }
+        `}
+      >
+        Grid Stitch
+      </button>
+    </div>
+  )
+
+  /* ── Grid Stitch mode ── */
+
+  if (mode === 'gridStitch') {
+    return (
+      <div className="h-full min-h-0 flex flex-col gap-3">
+        {tabBar}
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-white/30 text-sm">Loading...</div>}>
+          <GridStitchMode />
+        </Suspense>
+      </div>
+    )
+  }
+
+  /* ── Merge mode: empty state ── */
 
   if (files.length === 0) {
     return (
       <div className="h-full flex flex-col gap-4">
+        {tabBar}
         <FileDropZone
           onFiles={handleFiles}
           accept="application/pdf"
@@ -585,7 +635,7 @@ export default function PdfMergeTool() {
     )
   }
 
-  /* ── Render: main view ── */
+  /* ── Merge mode: main view ── */
 
   return (
     <div
@@ -604,7 +654,8 @@ export default function PdfMergeTool() {
           </div>
         </div>
       )}
-      {/* Toolbar */}
+      {/* Tab bar + Toolbar */}
+      {tabBar}
       <div className="flex items-center gap-3 flex-shrink-0">
         <span className="text-sm text-white/60">
           {files.length} file{files.length !== 1 ? 's' : ''} ·{' '}
