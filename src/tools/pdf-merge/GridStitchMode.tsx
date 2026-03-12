@@ -950,6 +950,7 @@ export default function GridStitchMode() {
                 onContextMenu={(e) => handleContextMenu(e, cell.id)}
                 onFocus={() => { setFocusCellId(cell.id); setSelectedCellId(cell.id) }}
                 onUpdateLabel={(label) => handleUpdateLabel(cell.id, label)}
+                onAddFile={() => replaceCell(cell.id)}
               />
             ))}
             </div>

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, memo } from 'react'
-import { ZoomIn, ZoomOut, X, Maximize2 } from 'lucide-react'
+import { ZoomIn, ZoomOut, X, Maximize2, Plus } from 'lucide-react'
 
 /* ── Types ── */
 
@@ -29,6 +29,7 @@ interface GridCellProps {
   onContextMenu: (e: React.MouseEvent) => void
   onFocus: () => void
   onUpdateLabel: (label: string) => void
+  onAddFile: () => void
 }
 
 /* ── Constants ── */
@@ -52,6 +53,7 @@ export const GridCell = memo(function GridCell({
   onContextMenu,
   onFocus,
   onUpdateLabel,
+  onAddFile,
 }: GridCellProps) {
   const dragRef = useRef<{
     startX: number
@@ -222,8 +224,14 @@ export const GridCell = memo(function GridCell({
           />
         </div>
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-xs text-black/20 font-medium">Empty</span>
+        <div
+          className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer group/add hover:bg-black/[0.03] transition-colors"
+          onClick={(e) => { e.stopPropagation(); onAddFile() }}
+        >
+          <div className="w-10 h-10 rounded-full border-2 border-dashed border-black/15 group-hover/add:border-[#F47B20]/50 group-hover/add:bg-[#F47B20]/5 flex items-center justify-center transition-colors">
+            <Plus size={20} className="text-black/20 group-hover/add:text-[#F47B20]/70 transition-colors" />
+          </div>
+          <span className="text-[10px] text-black/20 group-hover/add:text-black/40 mt-1.5 transition-colors">Add file</span>
         </div>
       )}
 
