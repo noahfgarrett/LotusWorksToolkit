@@ -231,6 +231,7 @@ export const GridCell = memo(function GridCell({
 
   const handleCellDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
+    e.stopPropagation()
     setIsDragOver(false)
 
     // File drop from desktop

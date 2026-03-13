@@ -305,6 +305,7 @@ export default function GridStitchMode() {
   // Multi-select & region focus state
   const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
   const [regionFocusIds, setRegionFocusIds] = useState<string[] | null>(null)
+  const regionSnapshotRef = useRef<GridCellData[] | null>(null)
 
   // Container measurement
   const containerRef = useRef<HTMLDivElement>(null)
@@ -609,10 +610,31 @@ export default function GridStitchMode() {
 
   const enterRegionFocus = useCallback(() => {
     if (multiSelected.size < 2) return
+    // Snapshot cells before entering so we can discard changes
+    regionSnapshotRef.current = cells.map(c => ({ ...c }))
     setRegionFocusIds(Array.from(multiSelected))
-  }, [multiSelected])
+  }, [multiSelected, cells])
 
-  const exitRegionFocus = useCallback(() => {
+  const applyRegionFocus = useCallback(() => {
+    // Changes are already in cells state — just push undo and close
+    if (regionSnapshotRef.current) {
+      // Push the pre-region snapshot as undo point
+      undoStack.current.push({ rows, cols, cells: regionSnapshotRef.current })
+      if (undoStack.current.length > MAX_UNDO_HISTORY) undoStack.current.shift()
+      redoStack.current = []
+      setUndoCounter(c => c + 1)
+    }
+    regionSnapshotRef.current = null
+    setRegionFocusIds(null)
+    setMultiSelected(new Set())
+  }, [rows, cols])
+
+  const discardRegionFocus = useCallback(() => {
+    // Restore cells to pre-region snapshot
+    if (regionSnapshotRef.current) {
+      setCells(regionSnapshotRef.current)
+    }
+    regionSnapshotRef.current = null
     setRegionFocusIds(null)
     setMultiSelected(new Set())
   }, [])
@@ -638,7 +660,7 @@ export default function GridStitchMode() {
 
       if (e.key === 'Escape') {
         if (focusCellId) { setFocusCellId(null); return }
-        if (regionFocusIds) { exitRegionFocus(); return }
+        if (regionFocusIds) { discardRegionFocus(); return }
         if (multiSelected.size > 0) { setMultiSelected(new Set()); return }
         setSelectedCellId(null)
         setCtxMenu(null)
@@ -685,7 +707,7 @@ export default function GridStitchMode() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedCellId, focusCellId, regionFocusIds, multiSelected, cells, undo, redo, clearCell, exitRegionFocus])
+  }, [selectedCellId, focusCellId, regionFocusIds, multiSelected, cells, undo, redo, clearCell, discardRegionFocus])
 
   /* ── Context menu ── */
 
@@ -1413,11 +1435,18 @@ export default function GridStitchMode() {
               <div className="flex-1" />
 
               <button
-                onClick={exitRegionFocus}
+                onClick={discardRegionFocus}
+                className="px-3 py-1.5 rounded-md bg-white/[0.08] text-white/70 text-sm font-medium hover:bg-white/[0.12] transition-colors flex items-center gap-1.5"
+              >
+                <X size={14} />
+                Discard
+              </button>
+              <button
+                onClick={applyRegionFocus}
                 className="px-3 py-1.5 rounded-md bg-[#3B82F6] text-white text-sm font-medium hover:bg-[#2563EB] transition-colors flex items-center gap-1.5"
               >
-                <ArrowLeft size={14} />
-                Back to grid
+                <Check size={14} />
+                Apply
               </button>
             </div>
 
@@ -1483,7 +1512,7 @@ export default function GridStitchMode() {
             {/* Region footer */}
             <div className="px-4 py-2 bg-[#00171F] border-t border-white/[0.08] flex-shrink-0">
               <p className="text-[10px] text-white/30 text-center">
-                Esc to return to full grid &middot; All normal controls work here
+                Esc to discard &middot; All normal controls work here &middot; Click Apply to keep changes
               </p>
             </div>
           </div>
