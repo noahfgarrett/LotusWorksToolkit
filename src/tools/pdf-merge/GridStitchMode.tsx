@@ -51,6 +51,7 @@ const GRID_PRESETS: { label: string; rows: number; cols: number }[] = [
 ]
 
 type FillOrder = 'row' | 'column'
+type LabelMode = 'default' | 'grid-axis'
 
 interface ExportPageSize {
   label: string
@@ -74,7 +75,12 @@ const MAX_UNDO_HISTORY = 50
 
 /* ── Helpers ── */
 
-function computeLabel(row: number, col: number): string {
+function computeLabel(row: number, col: number, mode: LabelMode = 'default', totalRows: number = 1): string {
+  if (mode === 'grid-axis') {
+    // Column = letter (A, B, C...), Row = number counting up from bottom
+    return `${String.fromCharCode(65 + col)}${totalRows - row}`
+  }
+  // Default: Row = letter, Col = number
   return `${String.fromCharCode(65 + row)}${col + 1}`
 }
 
@@ -88,13 +94,13 @@ function isPDF(file: File): boolean {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 }
 
-function buildEmptyGrid(rows: number, cols: number): GridCellData[] {
+function buildEmptyGrid(rows: number, cols: number, labelMode: LabelMode = 'default'): GridCellData[] {
   const cells: GridCellData[] = []
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       cells.push({
         id: crypto.randomUUID(),
-        label: computeLabel(r, c),
+        label: computeLabel(r, c, labelMode, rows),
         file: null,
         type: null,
         thumbnail: null,
@@ -252,6 +258,7 @@ export default function GridStitchMode() {
 
   const [fillOrder, setFillOrder] = useState<FillOrder>('row')
   const [exportPageSize, setExportPageSize] = useState(0) // index into EXPORT_PAGE_SIZES
+  const [labelMode, setLabelMode] = useState<LabelMode>('default')
 
   // Undo/redo history
   interface GridSnapshot { rows: number; cols: number; cells: GridCellData[] }
@@ -338,11 +345,11 @@ export default function GridStitchMode() {
           // Try to preserve existing cell data
           const oldIdx = r < rows && c < cols ? r * cols + c : -1
           if (oldIdx >= 0 && oldIdx < prev.length) {
-            newCells.push({ ...prev[oldIdx], label: computeLabel(r, c) })
+            newCells.push({ ...prev[oldIdx], label: computeLabel(r, c, labelMode, newRows) })
           } else {
             newCells.push({
               id: crypto.randomUUID(),
-              label: computeLabel(r, c),
+              label: computeLabel(r, c, labelMode, newRows),
               file: null,
               type: null,
               thumbnail: null,
@@ -360,7 +367,7 @@ export default function GridStitchMode() {
     setRows(newRows)
     setCols(newCols)
     setSelectedCellId(null)
-  }, [rows, cols, pushUndo])
+  }, [rows, cols, labelMode, pushUndo])
 
   /* ── File upload & processing ── */
 
@@ -560,9 +567,21 @@ export default function GridStitchMode() {
     const hasContent = cells.some(c => c.file !== null)
     if (hasContent && !window.confirm('Clear all cells?')) return
     pushUndo()
-    setCells(buildEmptyGrid(rows, cols))
+    setCells(buildEmptyGrid(rows, cols, labelMode))
     setSelectedCellId(null)
-  }, [cells, rows, cols, pushUndo])
+  }, [cells, rows, cols, labelMode, pushUndo])
+
+  /* ── Label mode toggle ── */
+
+  const toggleLabelMode = useCallback(() => {
+    const newMode: LabelMode = labelMode === 'default' ? 'grid-axis' : 'default'
+    setLabelMode(newMode)
+    setCells(prev => prev.map((c, idx) => {
+      const r = Math.floor(idx / cols)
+      const col = idx % cols
+      return { ...c, label: computeLabel(r, col, newMode, rows) }
+    }))
+  }, [labelMode, rows, cols])
 
   /* ── Apply zoom to all ── */
 
@@ -1023,6 +1042,18 @@ export default function GridStitchMode() {
             <option key={i} value={i}>{p.label}</option>
           ))}
         </select>
+
+        {/* Label mode toggle */}
+        <button
+          onClick={toggleLabelMode}
+          className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors ${
+            labelMode === 'grid-axis' ? 'bg-[#F47B20]/20 text-[#F47B20]' : 'bg-white/[0.04] text-white/40 hover:text-white/60'
+          }`}
+          title={labelMode === 'default' ? 'Switch to grid-axis labels (A1 at bottom-left)' : 'Switch to default labels (A1 at top-left)'}
+        >
+          <Tag size={12} />
+          {labelMode === 'default' ? 'A1→' : '↑A1'}
+        </button>
 
         {hasAnyContent && (
           <span className="text-xs text-white/40">
