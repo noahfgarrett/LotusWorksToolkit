@@ -9,7 +9,7 @@ import { loadImage, resizeImage, canvasToBlob } from '@/utils/imageProcessing.ts
 import { downloadBlob } from '@/utils/download.ts'
 import { GridCell } from './GridCell.tsx'
 import type { GridCellData } from './GridCell.tsx'
-import { alignGrid, alignPair } from './autoAlign.ts'
+import { alignGrid, alignPair, type AlignResult } from './autoAlign.ts'
 import {
   Download, Trash2, Plus, Grid3X3, ZoomIn, ZoomOut, X, Check, Eye, EyeOff, Tag,
   Undo2, Redo2, LayoutGrid, Columns, Rows, Copy, ArrowLeft, Scan, Magnet,
@@ -73,6 +73,7 @@ const EXPORT_PAGE_SIZES: ExportPageSize[] = [
 ]
 
 const MAX_UNDO_HISTORY = 50
+const ALIGN_CONFIDENCE = 0.4
 
 /* ── Helpers ── */
 
@@ -617,11 +618,10 @@ export default function GridStitchMode() {
 
   const [isAligning, setIsAligning] = useState(false)
 
-  const handleAutoAlign = useCallback(() => {
+  const handleAutoAlign = useCallback(async () => {
     if (occupiedCells.length < 2) return
 
-    // Determine anchor
-    let anchorId = selectedCellId
+    const anchorId = selectedCellId
     if (!anchorId || !cells.find(c => c.id === anchorId)?.file) {
       useAppStore.getState().addToast({ type: 'warning', message: 'Select a cell with content as the anchor first' })
       return
@@ -630,17 +630,14 @@ export default function GridStitchMode() {
     pushUndo()
     setIsAligning(true)
 
-    // Use requestAnimationFrame to let the UI update before heavy work
-    requestAnimationFrame(() => {
-      const result = alignGrid(cells, rows, cols, anchorId!, cellSize)
+    try {
+      const result = await alignGrid(cells, rows, cols, anchorId, cellSize)
 
       setCells(prev => prev.map(c => {
         const adj = result.adjustments.get(c.id)
         if (!adj) return c
         return { ...c, offsetX: c.offsetX + adj.dx, offsetY: c.offsetY + adj.dy }
       }))
-
-      setIsAligning(false)
 
       if (result.alignedCount === 0 && result.skippedCount > 0) {
         useAppStore.getState().addToast({
@@ -653,10 +650,15 @@ export default function GridStitchMode() {
           : `Aligned ${result.alignedCount} pair${result.alignedCount !== 1 ? 's' : ''} successfully`
         useAppStore.getState().addToast({ type: 'success', message: msg })
       }
-    })
+    } catch (err) {
+      useAppStore.getState().addToast({ type: 'error', message: 'Auto-align failed — see console for details' })
+      console.error('Auto-align error:', err)
+    } finally {
+      setIsAligning(false)
+    }
   }, [selectedCellId, cells, rows, cols, cellSize, occupiedCells.length, pushUndo])
 
-  const handleAlignWithNeighbor = useCallback((cellId: string, neighborId: string, adjacency: 'horizontal' | 'vertical') => {
+  const handleAlignWithNeighbor = useCallback(async (cellId: string, neighborId: string, adjacency: 'horizontal' | 'vertical') => {
     const cell = cells.find(c => c.id === cellId)
     const neighbor = cells.find(c => c.id === neighborId)
     if (!cell?.file || !neighbor?.file) return
@@ -668,40 +670,42 @@ export default function GridStitchMode() {
     const cellRow = Math.floor(cellIdx / cols)
     const neighborRow = Math.floor(neighborIdx / cols)
 
-    let result
-    if (adjacency === 'horizontal') {
-      // Determine which is left, which is right
-      const [leftCell, rightCell] = cellCol < neighborCol ? [cell, neighbor] : [neighbor, cell]
-      result = alignPair(leftCell, rightCell, cellSize, 'horizontal')
-      if (!result || result.confidence < 0.6) {
-        useAppStore.getState().addToast({ type: 'warning', message: 'No matching edge found between these cells' })
-        return
+    try {
+      let result: AlignResult | null
+      if (adjacency === 'horizontal') {
+        const [leftCell, rightCell] = cellCol < neighborCol ? [cell, neighbor] : [neighbor, cell]
+        result = await alignPair(leftCell, rightCell, cellSize, 'horizontal')
+        if (!result || result.confidence < ALIGN_CONFIDENCE) {
+          useAppStore.getState().addToast({ type: 'warning', message: `No matching edge found (${result ? Math.round(result.confidence * 100) + '% confidence' : 'no data'})` })
+          return
+        }
+        pushUndo()
+        const adjustDy = cellCol < neighborCol ? result.dy : -result.dy
+        setCells(prev => prev.map(c =>
+          c.id === cellId ? { ...c, offsetY: c.offsetY + adjustDy } : c,
+        ))
+      } else {
+        const [topCell, bottomCell] = cellRow < neighborRow ? [cell, neighbor] : [neighbor, cell]
+        result = await alignPair(topCell, bottomCell, cellSize, 'vertical')
+        if (!result || result.confidence < ALIGN_CONFIDENCE) {
+          useAppStore.getState().addToast({ type: 'warning', message: `No matching edge found (${result ? Math.round(result.confidence * 100) + '% confidence' : 'no data'})` })
+          return
+        }
+        pushUndo()
+        const adjustDx = cellRow < neighborRow ? result.dx : -result.dx
+        setCells(prev => prev.map(c =>
+          c.id === cellId ? { ...c, offsetX: c.offsetX + adjustDx } : c,
+        ))
       }
-      // Adjust the non-anchor cell (the one that was right-clicked)
-      pushUndo()
-      const adjustDy = cellCol < neighborCol ? result.dy : -result.dy
-      setCells(prev => prev.map(c =>
-        c.id === cellId ? { ...c, offsetY: c.offsetY + adjustDy } : c,
-      ))
-    } else {
-      // Determine which is top, which is bottom
-      const [topCell, bottomCell] = cellRow < neighborRow ? [cell, neighbor] : [neighbor, cell]
-      result = alignPair(topCell, bottomCell, cellSize, 'vertical')
-      if (!result || result.confidence < 0.6) {
-        useAppStore.getState().addToast({ type: 'warning', message: 'No matching edge found between these cells' })
-        return
-      }
-      pushUndo()
-      const adjustDx = cellRow < neighborRow ? result.dx : -result.dx
-      setCells(prev => prev.map(c =>
-        c.id === cellId ? { ...c, offsetX: c.offsetX + adjustDx } : c,
-      ))
-    }
 
-    useAppStore.getState().addToast({
-      type: 'success',
-      message: `Aligned with ${neighbor.label} (${Math.round(result.confidence * 100)}% confidence)`,
-    })
+      useAppStore.getState().addToast({
+        type: 'success',
+        message: `Aligned with ${neighbor.label} (${Math.round(result.confidence * 100)}% confidence)`,
+      })
+    } catch (err) {
+      useAppStore.getState().addToast({ type: 'error', message: 'Alignment failed' })
+      console.error('Align with neighbor error:', err)
+    }
   }, [cells, cols, cellSize, pushUndo])
 
   /* ── Multi-select handlers ── */

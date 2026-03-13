@@ -3,7 +3,7 @@
  *
  * Detects overlapping regions between adjacent grid cells by comparing
  * pixel strips at shared edges using Normalized Cross-Correlation (NCC).
- * Pure utility — no React, no dependencies.
+ * Pure utility — no React, no dependencies beyond Canvas API.
  */
 
 import type { GridCellData } from './GridCell.tsx'
@@ -17,11 +17,8 @@ export interface AlignResult {
 }
 
 export interface GridAlignResult {
-  /** Map of cellId → { dx, dy } offset adjustments */
   adjustments: Map<string, { dx: number; dy: number }>
-  /** Number of pairs successfully aligned */
   alignedCount: number
-  /** Number of pairs skipped (low confidence) */
   skippedCount: number
 }
 
@@ -29,8 +26,20 @@ type Edge = 'left' | 'right' | 'top' | 'bottom'
 
 /* ── Constants ── */
 
-const STRIP_WIDTH = 40
-const CONFIDENCE_THRESHOLD = 0.6
+const STRIP_WIDTH = 80
+const CONFIDENCE_THRESHOLD = 0.4
+
+/* ── Image loading ── */
+
+/** Load an image from a data URL, waiting for it to fully decode. */
+function loadImageAsync(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Failed to load image'))
+    img.src = src
+  })
+}
 
 /* ── Pixel extraction ── */
 
@@ -38,26 +47,21 @@ const CONFIDENCE_THRESHOLD = 0.6
  * Render a cell's visible content onto an offscreen canvas and extract
  * a grayscale pixel strip from the specified edge.
  */
-export function extractEdgeStrip(
+export async function extractEdgeStrip(
   cell: GridCellData,
   cellSize: number,
   edge: Edge,
-): { pixels: Float32Array; width: number; height: number } | null {
+): Promise<{ pixels: Float32Array; width: number; height: number } | null> {
   if (!cell.thumbnail || cell.nativeWidth <= 0 || cell.nativeHeight <= 0) return null
+  if (cellSize < STRIP_WIDTH) return null
 
-  // Create offscreen canvas at cell display size
+  const img = await loadImageAsync(cell.thumbnail)
+
   const canvas = document.createElement('canvas')
   canvas.width = cellSize
   canvas.height = cellSize
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) return null
-
-  // Load thumbnail image synchronously from data URL
-  const img = new Image()
-  img.src = cell.thumbnail
-
-  // If image hasn't loaded yet, bail (thumbnails are data URLs so should be sync)
-  if (img.width === 0 || img.height === 0) return null
 
   // Replicate the same contain-fit + zoom + offset math as GridCell
   const fitScaleX = cellSize / cell.nativeWidth
@@ -70,49 +74,35 @@ export function extractEdgeStrip(
   const contentLeft = (cellSize - displayW) / 2 + cell.offsetX
   const contentTop = (cellSize - displayH) / 2 + cell.offsetY
 
-  // Draw the image at the computed position
   ctx.drawImage(img, contentLeft, contentTop, displayW, displayH)
 
-  // Extract pixel strip from the specified edge
+  // Determine strip region
   let sx: number, sy: number, sw: number, sh: number
   switch (edge) {
     case 'right':
-      sx = cellSize - STRIP_WIDTH
-      sy = 0
-      sw = STRIP_WIDTH
-      sh = cellSize
+      sx = cellSize - STRIP_WIDTH; sy = 0; sw = STRIP_WIDTH; sh = cellSize
       break
     case 'left':
-      sx = 0
-      sy = 0
-      sw = STRIP_WIDTH
-      sh = cellSize
+      sx = 0; sy = 0; sw = STRIP_WIDTH; sh = cellSize
       break
     case 'bottom':
-      sx = 0
-      sy = cellSize - STRIP_WIDTH
-      sw = cellSize
-      sh = STRIP_WIDTH
+      sx = 0; sy = cellSize - STRIP_WIDTH; sw = cellSize; sh = STRIP_WIDTH
       break
     case 'top':
-      sx = 0
-      sy = 0
-      sw = cellSize
-      sh = STRIP_WIDTH
+      sx = 0; sy = 0; sw = cellSize; sh = STRIP_WIDTH
       break
   }
 
   const imageData = ctx.getImageData(sx, sy, sw, sh)
   const rgba = imageData.data
 
-  // Convert to grayscale (luminance)
+  // Convert to grayscale
   const pixels = new Float32Array(sw * sh)
   for (let i = 0; i < pixels.length; i++) {
     const ri = i * 4
     pixels[i] = 0.299 * rgba[ri] + 0.587 * rgba[ri + 1] + 0.114 * rgba[ri + 2]
   }
 
-  // Clean up
   canvas.width = 0
   canvas.height = 0
 
@@ -122,66 +112,145 @@ export function extractEdgeStrip(
 /* ── Cross-Correlation ── */
 
 /**
- * Compute 1D normalized cross-correlation between two strips,
- * sliding along the specified axis.
- *
- * For horizontal pairs: strips are tall (STRIP_WIDTH × cellSize),
- * we slide vertically to find dy.
- *
- * For vertical pairs: strips are wide (cellSize × STRIP_WIDTH),
- * we slide horizontally to find dx.
+ * Compute NCC between two 1D grayscale arrays of the same length.
+ * Returns correlation coefficient (-1 to 1).
  */
-function computeNCC(
+function ncc1d(a: Float32Array, b: Float32Array, len: number): number {
+  let sumA = 0, sumB = 0
+  for (let i = 0; i < len; i++) { sumA += a[i]; sumB += b[i] }
+  const meanA = sumA / len
+  const meanB = sumB / len
+
+  let num = 0, denomA = 0, denomB = 0
+  for (let i = 0; i < len; i++) {
+    const da = a[i] - meanA
+    const db = b[i] - meanB
+    num += da * db
+    denomA += da * da
+    denomB += db * db
+  }
+
+  const denom = Math.sqrt(denomA * denomB)
+  return denom > 1e-6 ? num / denom : 0
+}
+
+/**
+ * For a horizontal pair (A's right edge, B's left edge):
+ *   - Strips are STRIP_WIDTH wide × cellSize tall
+ *   - We slide B's strip vertically (dy) relative to A's strip
+ *   - At each dy, we collapse both strips to 1D by averaging across the STRIP_WIDTH
+ *     columns, then compute NCC on the overlapping rows
+ *
+ * For a vertical pair (A's bottom edge, B's top edge):
+ *   - Strips are cellSize wide × STRIP_WIDTH tall
+ *   - We slide B's strip horizontally (dx)
+ *   - Collapse rows, NCC on overlapping columns
+ */
+function findBestShift(
   stripA: { pixels: Float32Array; width: number; height: number },
   stripB: { pixels: Float32Array; width: number; height: number },
   direction: 'vertical' | 'horizontal',
 ): AlignResult {
-  // Determine slide axis dimensions
+  // For vertical sliding: slideLen = height, crossLen = width
+  // For horizontal sliding: slideLen = width, crossLen = height
   const slideLen = direction === 'vertical' ? stripA.height : stripA.width
   const crossLen = direction === 'vertical' ? stripA.width : stripA.height
 
-  // Search range: ±25% of slide length
-  const maxShift = Math.floor(slideLen * 0.25)
+  // Collapse each strip along the cross axis → 1D profile of length slideLen
+  const profileA = new Float32Array(slideLen)
+  const profileB = new Float32Array(slideLen)
+
+  for (let s = 0; s < slideLen; s++) {
+    let sumA = 0, sumB = 0
+    for (let c = 0; c < crossLen; c++) {
+      // pixel index = row * width + col
+      const idx = direction === 'vertical'
+        ? s * stripA.width + c   // s = row, c = col
+        : c * stripA.width + s   // c = row, s = col
+      sumA += stripA.pixels[idx]
+      sumB += stripB.pixels[idx]
+    }
+    profileA[s] = sumA / crossLen
+    profileB[s] = sumB / crossLen
+  }
+
+  // Search range: ±30% of slide length
+  const maxShift = Math.floor(slideLen * 0.3)
+  const minOverlap = Math.floor(slideLen * 0.4)
 
   let bestOffset = 0
   let bestScore = -Infinity
 
   for (let d = -maxShift; d <= maxShift; d++) {
-    // Compute overlap region
-    const overlapStart = Math.max(0, d)
-    const overlapEnd = Math.min(slideLen, slideLen + d)
-    const overlapLen = overlapEnd - overlapStart
-    if (overlapLen < slideLen * 0.3) continue // Need at least 30% overlap
+    // Overlap region in profileA: [aStart, aEnd)
+    // Overlap region in profileB: [bStart, bEnd)
+    const aStart = Math.max(0, d)
+    const bStart = Math.max(0, -d)
+    const overlapLen = Math.min(slideLen - aStart, slideLen - bStart)
+
+    if (overlapLen < minOverlap) continue
+
+    // Extract overlapping segments
+    const segA = profileA.subarray(aStart, aStart + overlapLen)
+    const segB = profileB.subarray(bStart, bStart + overlapLen)
+
+    const score = ncc1d(segA, segB, overlapLen)
+
+    if (score > bestScore) {
+      bestScore = score
+      bestOffset = d
+    }
+  }
+
+  // Also try full 2D NCC at the best 1D offset for refinement
+  // (the 1D profile gives the coarse shift; we verify with 2D)
+  const refined = refine2D(stripA, stripB, direction, bestOffset, 3)
+  if (refined.confidence > bestScore) {
+    return refined
+  }
+
+  return {
+    dx: direction === 'horizontal' ? bestOffset : 0,
+    dy: direction === 'vertical' ? bestOffset : 0,
+    confidence: Math.max(0, bestScore),
+  }
+}
+
+/**
+ * Refine a coarse 1D offset by doing full 2D NCC in a small window around it.
+ */
+function refine2D(
+  stripA: { pixels: Float32Array; width: number; height: number },
+  stripB: { pixels: Float32Array; width: number; height: number },
+  direction: 'vertical' | 'horizontal',
+  coarseOffset: number,
+  radius: number,
+): AlignResult {
+  const slideLen = direction === 'vertical' ? stripA.height : stripA.width
+  const crossLen = direction === 'vertical' ? stripA.width : stripA.height
+  const minOverlap = Math.floor(slideLen * 0.4)
+
+  let bestOffset = coarseOffset
+  let bestScore = -Infinity
+
+  for (let d = coarseOffset - radius; d <= coarseOffset + radius; d++) {
+    const aStart = Math.max(0, d)
+    const bStart = Math.max(0, -d)
+    const overlapLen = Math.min(slideLen - aStart, slideLen - bStart)
+    if (overlapLen < minOverlap) continue
 
     const n = overlapLen * crossLen
-    if (n === 0) continue
 
     // Compute means
-    let sumA = 0
-    let sumB = 0
-
+    let sumA = 0, sumB = 0
     for (let s = 0; s < overlapLen; s++) {
       for (let c = 0; c < crossLen; c++) {
-        const idxA = direction === 'vertical'
-          ? (overlapStart + s - d + d) * stripA.width + c  // map to A's coordinates
-          : c * stripA.width + (overlapStart + s - d + d)
-        const idxB = direction === 'vertical'
-          ? (overlapStart + s) * stripB.width + c
-          : c * stripB.width + (overlapStart + s)
-
-        // Simplify: A index is at position (overlapStart + s - d) in slide axis
-        const aSlide = overlapStart + s - d
-        const bSlide = overlapStart + s
-
-        if (aSlide < 0 || aSlide >= slideLen || bSlide < 0 || bSlide >= slideLen) continue
-
         const aIdx = direction === 'vertical'
-          ? aSlide * stripA.width + c
-          : c * stripA.width + aSlide
+          ? (aStart + s) * stripA.width + c
+          : c * stripA.width + (aStart + s)
         const bIdx = direction === 'vertical'
-          ? bSlide * stripB.width + c
-          : c * stripB.width + bSlide
-
+          ? (bStart + s) * stripB.width + c
+          : c * stripB.width + (bStart + s)
         sumA += stripA.pixels[aIdx]
         sumB += stripB.pixels[bIdx]
       }
@@ -191,24 +260,15 @@ function computeNCC(
     const meanB = sumB / n
 
     // Compute NCC
-    let num = 0
-    let denomA = 0
-    let denomB = 0
-
+    let num = 0, denomA = 0, denomB = 0
     for (let s = 0; s < overlapLen; s++) {
       for (let c = 0; c < crossLen; c++) {
-        const aSlide = overlapStart + s - d
-        const bSlide = overlapStart + s
-
-        if (aSlide < 0 || aSlide >= slideLen || bSlide < 0 || bSlide >= slideLen) continue
-
         const aIdx = direction === 'vertical'
-          ? aSlide * stripA.width + c
-          : c * stripA.width + aSlide
+          ? (aStart + s) * stripA.width + c
+          : c * stripA.width + (aStart + s)
         const bIdx = direction === 'vertical'
-          ? bSlide * stripB.width + c
-          : c * stripB.width + bSlide
-
+          ? (bStart + s) * stripB.width + c
+          : c * stripB.width + (bStart + s)
         const da = stripA.pixels[aIdx] - meanA
         const db = stripB.pixels[bIdx] - meanB
         num += da * db
@@ -218,7 +278,7 @@ function computeNCC(
     }
 
     const denom = Math.sqrt(denomA * denomB)
-    const score = denom > 0 ? num / denom : 0
+    const score = denom > 1e-6 ? num / denom : 0
 
     if (score > bestScore) {
       bestScore = score
@@ -237,223 +297,166 @@ function computeNCC(
 
 /**
  * Align two adjacent cells. Returns the offset adjustment for cellB
- * to align with cellA at their shared edge.
- *
- * For horizontal neighbors (A left of B): compare A's right edge with B's left edge
- * For vertical neighbors (A above B): compare A's bottom edge with B's top edge
+ * relative to cellA at their shared edge.
  */
-export function alignPair(
+export async function alignPair(
   cellA: GridCellData,
   cellB: GridCellData,
   cellSize: number,
   adjacency: 'horizontal' | 'vertical',
-): AlignResult | null {
+): Promise<AlignResult | null> {
   if (adjacency === 'horizontal') {
-    const stripA = extractEdgeStrip(cellA, cellSize, 'right')
-    const stripB = extractEdgeStrip(cellB, cellSize, 'left')
+    const stripA = await extractEdgeStrip(cellA, cellSize, 'right')
+    const stripB = await extractEdgeStrip(cellB, cellSize, 'left')
     if (!stripA || !stripB) return null
-    return computeNCC(stripA, stripB, 'vertical')
+    return findBestShift(stripA, stripB, 'vertical')
   } else {
-    const stripA = extractEdgeStrip(cellA, cellSize, 'bottom')
-    const stripB = extractEdgeStrip(cellB, cellSize, 'top')
+    const stripA = await extractEdgeStrip(cellA, cellSize, 'bottom')
+    const stripB = await extractEdgeStrip(cellB, cellSize, 'top')
     if (!stripA || !stripB) return null
-    return computeNCC(stripA, stripB, 'horizontal')
+    return findBestShift(stripA, stripB, 'horizontal')
   }
 }
 
 /* ── Full-grid alignment ── */
 
-/**
- * Align the entire grid starting from an anchor cell.
- * Cascade: align anchor's row first (left/right), then align columns from each row cell.
- */
-export function alignGrid(
+export async function alignGrid(
   cells: GridCellData[],
   rows: number,
   cols: number,
   anchorId: string,
   cellSize: number,
   onProgress?: (current: number, total: number) => void,
-): GridAlignResult {
+): Promise<GridAlignResult> {
   const adjustments = new Map<string, { dx: number; dy: number }>()
   let alignedCount = 0
   let skippedCount = 0
 
-  // Find anchor position
   const anchorIdx = cells.findIndex(c => c.id === anchorId)
   if (anchorIdx === -1) return { adjustments, alignedCount, skippedCount }
 
   const anchorRow = Math.floor(anchorIdx / cols)
   const anchorCol = anchorIdx % cols
 
-  // Track which cells have been aligned (anchor starts as aligned)
-  const aligned = new Set<string>([anchorId])
-  // Track cumulative offsets (anchor = 0,0)
   const cumulativeOffset = new Map<string, { dx: number; dy: number }>()
   cumulativeOffset.set(anchorId, { dx: 0, dy: 0 })
 
-  // Count total pairs for progress
-  let totalPairs = 0
-  // Horizontal pairs in anchor row
-  totalPairs += cols - 1
-  // Vertical pairs from each column
-  totalPairs += cols * (rows - 1)
+  const totalPairs = (cols - 1) + cols * (rows - 1)
   let processed = 0
 
-  // Step 1: Align anchor's row — go left, then right
+  // Step 1: Align anchor's row — left then right
   const rowOrder: number[] = []
   for (let c = anchorCol - 1; c >= 0; c--) rowOrder.push(c)
   for (let c = anchorCol + 1; c < cols; c++) rowOrder.push(c)
 
   for (const c of rowOrder) {
-    // Determine which neighbor is already aligned
     const isLeft = c < anchorCol
     const neighborCol = isLeft ? c + 1 : c - 1
-    const cellIdx = anchorRow * cols + c
-    const neighborIdx = anchorRow * cols + neighborCol
-    const cell = cells[cellIdx]
-    const neighbor = cells[neighborIdx]
-
-    if (!cell.file || !neighbor.file) {
-      skippedCount++
-      processed++
-      onProgress?.(processed, totalPairs)
-      continue
-    }
-
-    const result = alignPair(
-      isLeft ? cell : neighbor,
-      isLeft ? neighbor : cell,
-      cellSize,
-      'horizontal',
-    )
+    const cell = cells[anchorRow * cols + c]
+    const neighbor = cells[anchorRow * cols + neighborCol]
 
     processed++
     onProgress?.(processed, totalPairs)
 
-    if (!result || result.confidence < CONFIDENCE_THRESHOLD) {
+    if (!cell.file || !neighbor.file) {
       skippedCount++
-      // Still mark as "aligned" position-wise so cascade can continue
-      const neighborOff = cumulativeOffset.get(neighbor.id) ?? { dx: 0, dy: 0 }
-      cumulativeOffset.set(cell.id, { dx: neighborOff.dx, dy: neighborOff.dy })
-      aligned.add(cell.id)
+      const nOff = cumulativeOffset.get(neighbor.id) ?? { dx: 0, dy: 0 }
+      cumulativeOffset.set(cell.id, { ...nOff })
       continue
     }
 
-    // Apply offset relative to the aligned neighbor
-    const neighborOff = cumulativeOffset.get(neighbor.id) ?? { dx: 0, dy: 0 }
+    // Always pass left cell as A, right cell as B
+    const [leftCell, rightCell] = isLeft ? [cell, neighbor] : [neighbor, cell]
+    const result = await alignPair(leftCell, rightCell, cellSize, 'horizontal')
 
-    if (isLeft) {
-      // Cell is to the left: neighbor's left edge matched with cell's right edge
-      // result.dy is how much to shift neighbor relative to cell
-      // But neighbor is already placed, so we shift cell by -dy
-      cumulativeOffset.set(cell.id, {
-        dx: neighborOff.dx,
-        dy: neighborOff.dy - result.dy,
-      })
-    } else {
-      // Cell is to the right: neighbor's right edge matched with cell's left edge
-      cumulativeOffset.set(cell.id, {
-        dx: neighborOff.dx,
-        dy: neighborOff.dy + result.dy,
-      })
+    if (!result || result.confidence < CONFIDENCE_THRESHOLD) {
+      skippedCount++
+      const nOff = cumulativeOffset.get(neighbor.id) ?? { dx: 0, dy: 0 }
+      cumulativeOffset.set(cell.id, { ...nOff })
+      continue
     }
 
-    aligned.add(cell.id)
+    const nOff = cumulativeOffset.get(neighbor.id) ?? { dx: 0, dy: 0 }
+    if (isLeft) {
+      // Cell is left of neighbor. result.dy shifts right cell relative to left.
+      // Neighbor (right) is already placed, cell (left) adjusts by -dy.
+      cumulativeOffset.set(cell.id, { dx: nOff.dx, dy: nOff.dy - result.dy })
+    } else {
+      // Cell is right of neighbor. result.dy shifts right cell relative to left.
+      cumulativeOffset.set(cell.id, { dx: nOff.dx, dy: nOff.dy + result.dy })
+    }
     alignedCount++
   }
 
-  // Step 2: For each column position, align up and down from the anchor row
+  // Step 2: For each column, align up and down from anchor row
   for (let c = 0; c < cols; c++) {
-    const rowCell = cells[anchorRow * cols + c]
-    const baseOff = cumulativeOffset.get(rowCell.id) ?? { dx: 0, dy: 0 }
+    const rowCellId = cells[anchorRow * cols + c].id
+    const baseOff = cumulativeOffset.get(rowCellId) ?? { dx: 0, dy: 0 }
 
-    // Go up from anchor row
+    // Go up
     for (let r = anchorRow - 1; r >= 0; r--) {
-      const cellIdx = r * cols + c
-      const belowIdx = (r + 1) * cols + c
-      const cell = cells[cellIdx]
-      const below = cells[belowIdx]
+      const cell = cells[r * cols + c]
+      const below = cells[(r + 1) * cols + c]
+
+      processed++
+      onProgress?.(processed, totalPairs)
 
       if (!cell.file || !below.file) {
         skippedCount++
-        processed++
-        onProgress?.(processed, totalPairs)
-        const belowOff = cumulativeOffset.get(below.id) ?? baseOff
-        cumulativeOffset.set(cell.id, { dx: belowOff.dx, dy: belowOff.dy })
-        aligned.add(cell.id)
+        const bOff = cumulativeOffset.get(below.id) ?? baseOff
+        cumulativeOffset.set(cell.id, { ...bOff })
         continue
       }
 
-      const result = alignPair(cell, below, cellSize, 'vertical')
-
-      processed++
-      onProgress?.(processed, totalPairs)
-
-      const belowOff = cumulativeOffset.get(below.id) ?? baseOff
+      // cell is above, below is below — pass top cell as A, bottom cell as B
+      const result = await alignPair(cell, below, cellSize, 'vertical')
+      const bOff = cumulativeOffset.get(below.id) ?? baseOff
 
       if (!result || result.confidence < CONFIDENCE_THRESHOLD) {
         skippedCount++
-        cumulativeOffset.set(cell.id, { dx: belowOff.dx, dy: belowOff.dy })
-        aligned.add(cell.id)
+        cumulativeOffset.set(cell.id, { ...bOff })
         continue
       }
 
-      // Cell is above: cell's bottom matched with below's top
-      cumulativeOffset.set(cell.id, {
-        dx: belowOff.dx - result.dx,
-        dy: belowOff.dy,
-      })
-
-      aligned.add(cell.id)
+      // result.dx shifts bottom cell relative to top. Cell (top) adjusts by -dx.
+      cumulativeOffset.set(cell.id, { dx: bOff.dx - result.dx, dy: bOff.dy })
       alignedCount++
     }
 
-    // Go down from anchor row
+    // Go down
     for (let r = anchorRow + 1; r < rows; r++) {
-      const cellIdx = r * cols + c
-      const aboveIdx = (r - 1) * cols + c
-      const cell = cells[cellIdx]
-      const above = cells[aboveIdx]
-
-      if (!cell.file || !above.file) {
-        skippedCount++
-        processed++
-        onProgress?.(processed, totalPairs)
-        const aboveOff = cumulativeOffset.get(above.id) ?? baseOff
-        cumulativeOffset.set(cell.id, { dx: aboveOff.dx, dy: aboveOff.dy })
-        aligned.add(cell.id)
-        continue
-      }
-
-      const result = alignPair(above, cell, cellSize, 'vertical')
+      const cell = cells[r * cols + c]
+      const above = cells[(r - 1) * cols + c]
 
       processed++
       onProgress?.(processed, totalPairs)
 
-      const aboveOff = cumulativeOffset.get(above.id) ?? baseOff
-
-      if (!result || result.confidence < CONFIDENCE_THRESHOLD) {
+      if (!cell.file || !above.file) {
         skippedCount++
-        cumulativeOffset.set(cell.id, { dx: aboveOff.dx, dy: aboveOff.dy })
-        aligned.add(cell.id)
+        const aOff = cumulativeOffset.get(above.id) ?? baseOff
+        cumulativeOffset.set(cell.id, { ...aOff })
         continue
       }
 
-      // Cell is below: above's bottom matched with cell's top
-      cumulativeOffset.set(cell.id, {
-        dx: aboveOff.dx + result.dx,
-        dy: aboveOff.dy,
-      })
+      // above is top, cell is bottom
+      const result = await alignPair(above, cell, cellSize, 'vertical')
+      const aOff = cumulativeOffset.get(above.id) ?? baseOff
 
-      aligned.add(cell.id)
+      if (!result || result.confidence < CONFIDENCE_THRESHOLD) {
+        skippedCount++
+        cumulativeOffset.set(cell.id, { ...aOff })
+        continue
+      }
+
+      // result.dx shifts bottom cell relative to top. Cell (bottom) adjusts by +dx.
+      cumulativeOffset.set(cell.id, { dx: aOff.dx + result.dx, dy: aOff.dy })
       alignedCount++
     }
   }
 
-  // Convert cumulative offsets to adjustments (delta from current offset)
+  // Build adjustments
   for (const [cellId, offset] of cumulativeOffset) {
-    if (cellId === anchorId) continue // Anchor doesn't move
+    if (cellId === anchorId) continue
     adjustments.set(cellId, offset)
   }
 
