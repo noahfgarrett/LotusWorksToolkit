@@ -20,7 +20,7 @@ import {
   Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight, AlignJustify,
   Superscript, Subscript, List, ListOrdered,
   Search, Crop, Tag, Printer, FileSpreadsheet, StickyNote as StickyNoteIcon,
-  MessageCircle, Mail, FileText,
+  MessageCircle, Mail, FileText, ScanText,
 } from 'lucide-react'
 
 // ── Extracted modules ─────────────────────────────────
@@ -177,6 +177,11 @@ export default function PdfAnnotateTool() {
   const [ocrScanning, setOcrScanning] = useState(false)
   const ocrPagesRef = useRef<Set<string>>(new Set()) // tracks pages that needed OCR (cache keys)
   const ocrAbortRef = useRef<AbortController | null>(null)
+  // OCR Region scan tool
+  const ocrRegionStartRef = useRef<Point | null>(null)
+  const ocrRegionPreviewRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [ocrRegionResult, setOcrRegionResult] = useState<{ text: string; pageNum: number; rect: { x: number; y: number; w: number; h: number } } | null>(null)
+  const [ocrRegionScanning, setOcrRegionScanning] = useState(false)
   const [stampDropdownOpen, setStampDropdownOpen] = useState(false)
   const [activeStampPreset, setActiveStampPreset] = useState(STAMP_PRESETS[0])
   const [cropRegions, setCropRegions] = useState<Record<number, { x: number; y: number; w: number; h: number }>>({})
@@ -525,6 +530,22 @@ export default function PdfAnnotateTool() {
       }
     }
 
+    // OCR Region in-progress preview
+    if (activeTool === 'ocrRegion' && isActive && ocrRegionPreviewRef.current) {
+      const r = ocrRegionPreviewRef.current
+      ctx.save()
+      ctx.strokeStyle = '#3B82F6'
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 3])
+      ctx.globalAlpha = 0.8
+      ctx.strokeRect(r.x * rs, r.y * rs, r.w * rs, r.h * rs)
+      ctx.fillStyle = '#3B82F6'
+      ctx.globalAlpha = 0.08
+      ctx.fillRect(r.x * rs, r.y * rs, r.w * rs, r.h * rs)
+      ctx.setLineDash([])
+      ctx.restore()
+    }
+
     // Crop in-progress preview
     if (activeTool === 'crop' && isActive && cropDrawRef.current && currentPtsRef.current.length >= 2) {
       const cpts = currentPtsRef.current
@@ -545,7 +566,7 @@ export default function PdfAnnotateTool() {
     // ── In-progress elements (only on the active page) ──
     if (isActive) {
       // In-progress stroke
-      if (isDrawingRef.current && activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'cloud' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough') {
+      if (isDrawingRef.current && activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'cloud' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'ocrRegion') {
         const pts = currentPtsRef.current
         if (pts.length > 0) {
           const inProgress: Annotation = {
@@ -2089,6 +2110,15 @@ export default function PdfAnnotateTool() {
     return () => { ocrAbortRef.current?.abort() }
   }, [pdfFile])
 
+  // Clear OCR region state when switching away from ocrRegion tool
+  useEffect(() => {
+    if (activeTool !== 'ocrRegion') {
+      setOcrRegionResult(null)
+      ocrRegionPreviewRef.current = null
+      ocrRegionStartRef.current = null
+    }
+  }, [activeTool])
+
   // ── Focus textarea when editing ──────────────────────
 
   useEffect(() => {
@@ -2638,6 +2668,14 @@ export default function PdfAnnotateTool() {
     }
 
     // ── Crop tool: start dragging crop region ──
+    if (activeTool === 'ocrRegion') {
+      ocrRegionStartRef.current = pt
+      ocrRegionPreviewRef.current = null
+      setOcrRegionResult(null)
+      isDrawingRef.current = true
+      return
+    }
+
     if (activeTool === 'crop') {
       cropDrawRef.current = { startPt: pt }
       isDrawingRef.current = true
@@ -2795,6 +2833,18 @@ export default function PdfAnnotateTool() {
     // Cloud polygon: track cursor for preview
     if (activeTool === 'cloud' && currentPtsRef.current.length > 0) {
       cloudPreviewRef.current = getPointForPage(ap, e)
+      redrawPage(ap)
+      return
+    }
+
+    // OCR Region: draw selection rectangle preview
+    if (activeTool === 'ocrRegion' && ocrRegionStartRef.current && isDrawingRef.current) {
+      const start = ocrRegionStartRef.current
+      const cur = getPointForPage(ap, e)
+      ocrRegionPreviewRef.current = {
+        x: Math.min(start.x, cur.x), y: Math.min(start.y, cur.y),
+        w: Math.abs(cur.x - start.x), h: Math.abs(cur.y - start.y),
+      }
       redrawPage(ap)
       return
     }
@@ -3393,6 +3443,51 @@ export default function PdfAnnotateTool() {
         pushHistory(next)
       }
       eraserModsRef.current = { removed: new Set(), added: [] }
+      return
+    }
+
+    // OCR Region: finalize selection and run OCR
+    if (activeTool === 'ocrRegion') {
+      const region = ocrRegionPreviewRef.current
+      ocrRegionStartRef.current = null
+      isDrawingRef.current = false
+      if (!region || region.w < 10 || region.h < 10 || !pdfFile) {
+        ocrRegionPreviewRef.current = null
+        redrawPage(ap)
+        return
+      }
+      // Run OCR on the selected region
+      const scanRegion = { ...region }
+      const scanPage = ap
+      setOcrRegionScanning(true)
+      ;(async () => {
+        try {
+          const rotation = pageRotations[scanPage] || 0
+          const canvas = document.createElement('canvas')
+          await renderPageToCanvas(pdfFile, scanPage, canvas, 2.0, rotation)
+          const worker = await Tesseract.createWorker('eng')
+          const result = await worker.recognize(canvas, {
+            rectangle: { left: Math.round(scanRegion.x * 2), top: Math.round(scanRegion.y * 2), width: Math.round(scanRegion.w * 2), height: Math.round(scanRegion.h * 2) },
+          }, { text: true })
+          await worker.terminate()
+          canvas.width = 0
+          canvas.height = 0
+          const text = (result.data.text ?? '').trim()
+          if (text) {
+            setOcrRegionResult({ text, pageNum: scanPage, rect: scanRegion })
+          } else {
+            addToast({ type: 'warning', message: 'No text detected in selected region' })
+            ocrRegionPreviewRef.current = null
+            redrawPage(scanPage)
+          }
+        } catch {
+          addToast({ type: 'error', message: 'OCR scan failed' })
+          ocrRegionPreviewRef.current = null
+          redrawPage(scanPage)
+        } finally {
+          setOcrRegionScanning(false)
+        }
+      })()
       return
     }
 
@@ -4217,11 +4312,11 @@ export default function PdfAnnotateTool() {
   const isShapeAnnSelected = selectedAnn && !isTextAnnSelected
 
   // Properties bar context
-  const showPropsForTool = activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'stamp' && activeTool !== 'crop' && activeTool !== 'note'
+  const showPropsForTool = activeTool !== 'select' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'stamp' && activeTool !== 'crop' && activeTool !== 'note' && activeTool !== 'ocrRegion'
   const showPropsForSelection = activeTool === 'select' && selectedAnn
   const showTextProps = (isTextAnnSelected && activeTool === 'select') || activeTool === 'text' || activeTool === 'callout'
   const showStrokeWidth = (isShapeAnnSelected && activeTool === 'select') ||
-    (activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'stamp' && activeTool !== 'crop' && activeTool !== 'note')
+    (activeTool !== 'select' && activeTool !== 'text' && activeTool !== 'callout' && activeTool !== 'eraser' && activeTool !== 'measure' && activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'stamp' && activeTool !== 'crop' && activeTool !== 'note' && activeTool !== 'ocrRegion')
   const showOpacity = showPropsForTool || (activeTool === 'select' && selectedAnn != null)
   const showColorPicker = showPropsForTool || showPropsForSelection
   const showEraserControls = activeTool === 'eraser'
@@ -5101,6 +5196,13 @@ export default function PdfAnnotateTool() {
             }`}>
             <Crop size={16} />
           </button>
+          {/* OCR Region Scan */}
+          <button onClick={() => { setActiveTool('ocrRegion'); setOcrRegionResult(null) }} title="OCR Region Scan"
+            className={`p-1.5 rounded-lg transition-colors ${
+              activeTool === 'ocrRegion' ? 'bg-[#F47B20]/15 text-[#F47B20] ring-1 ring-inset ring-[#F47B20]/30' : 'text-white/50 hover:text-white hover:bg-white/[0.06]'
+            }`}>
+            <ScanText size={16} />
+          </button>
           {/* Sticky Note */}
           <button onClick={() => setActiveTool('note')} title="Sticky Note (N)"
             className={`p-1.5 rounded-lg transition-colors ${
@@ -5355,6 +5457,61 @@ export default function PdfAnnotateTool() {
         )
       })()}
 
+      {/* ── OCR Region result popup ── */}
+      {(ocrRegionResult || ocrRegionScanning) && (() => {
+        const targetPage = ocrRegionResult?.pageNum ?? activePageRef.current
+        const activeCanvas = pageRefsMap.current.get(targetPage)?.annCanvas
+        if (!activeCanvas) return null
+        const canvasRect = activeCanvas.getBoundingClientRect()
+        const rect = ocrRegionResult?.rect ?? ocrRegionPreviewRef.current
+        if (!rect) return null
+        const screenX = canvasRect.left + (rect.x + rect.w / 2) * zoom
+        const screenY = canvasRect.top + (rect.y + rect.h) * zoom + 8
+        const clampedX = Math.max(120, Math.min(window.innerWidth - 120, screenX))
+        const clampedY = Math.max(8, Math.min(window.innerHeight - 60, screenY))
+        return (
+          <div
+            style={{ position: 'fixed', left: clampedX, top: clampedY, transform: 'translateX(-50%)', zIndex: 50 }}
+            className="bg-[#1e1e2e] border border-white/10 rounded-lg shadow-lg max-w-[320px]"
+          >
+            {ocrRegionScanning ? (
+              <div className="px-3 py-2 flex items-center gap-2">
+                <div className="w-3 h-3 border-2 border-[#F47B20] border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs text-white/60">Scanning region...</span>
+              </div>
+            ) : ocrRegionResult ? (
+              <div className="flex flex-col">
+                <div className="px-3 py-2 max-h-[200px] overflow-y-auto">
+                  <p className="text-xs text-white/80 whitespace-pre-wrap select-all">{ocrRegionResult.text}</p>
+                </div>
+                <div className="flex items-center gap-1 px-2 py-1.5 border-t border-white/[0.08]">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(ocrRegionResult.text)
+                        .then(() => addToast({ type: 'success', message: 'Copied to clipboard' }))
+                        .catch(() => {})
+                    }}
+                    className="flex items-center gap-1 px-2 py-1 text-[11px] text-white/70 hover:text-white hover:bg-white/10 rounded transition-colors"
+                  >
+                    <TextSelect size={12} /> Copy
+                  </button>
+                  <button
+                    onClick={() => {
+                      setOcrRegionResult(null)
+                      ocrRegionPreviewRef.current = null
+                      redrawPage(targetPage)
+                    }}
+                    className="px-2 py-1 text-[11px] text-white/40 hover:text-white/70 hover:bg-white/10 rounded transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )
+      })()}
+
       {/* ── Compact status bar ────────────────────── */}
       <div className="grid grid-cols-3 items-center px-3 py-1.5 border-t border-white/[0.06] flex-shrink-0">
         {/* Left: file info */}
@@ -5420,6 +5577,7 @@ export default function PdfAnnotateTool() {
             activeTool === 'textHighlight' ? 'Drag to highlight' :
             activeTool === 'stamp' ? `${activeStampPreset.label} · click to place` :
             activeTool === 'crop' ? 'Drag to set crop region' :
+            activeTool === 'ocrRegion' ? 'Drag to scan text in region' :
             activeTool === 'note' ? 'Click to place a sticky note' :
             (activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'line' || activeTool === 'arrow')
               ? 'Shift for perfect shapes' :

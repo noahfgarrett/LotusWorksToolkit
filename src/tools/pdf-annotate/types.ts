@@ -6,7 +6,7 @@ import {
 
 // ── Core Types ──────────────────────────────────────────
 
-export type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'stamp' | 'crop' | 'note'
+export type ToolType = 'select' | 'pencil' | 'highlighter' | 'rectangle' | 'circle' | 'arrow' | 'line' | 'text' | 'eraser' | 'cloud' | 'callout' | 'measure' | 'textHighlight' | 'textStrikethrough' | 'stamp' | 'crop' | 'note' | 'ocrRegion'
 
 export interface Point { x: number; y: number }
 
@@ -258,7 +258,7 @@ export const CURSOR_MAP: Record<ToolType, string> = {
   arrow: 'crosshair', rectangle: 'crosshair', circle: 'crosshair',
   cloud: 'crosshair', text: 'text', eraser: 'none',
   callout: 'crosshair', measure: 'crosshair', textHighlight: 'text', textStrikethrough: 'text',
-  stamp: 'crosshair', crop: 'crosshair', note: 'crosshair',
+  stamp: 'crosshair', crop: 'crosshair', note: 'crosshair', ocrRegion: 'crosshair',
 }
 
 export const HANDLE_CURSOR_MAP: Record<string, string> = {
