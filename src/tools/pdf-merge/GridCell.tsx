@@ -19,6 +19,7 @@ export interface GridCellData {
 interface GridCellProps {
   cell: GridCellData
   isSelected: boolean
+  isMultiSelected: boolean
   cellWidth: number
   cellHeight: number
   onSelect: () => void
@@ -31,6 +32,7 @@ interface GridCellProps {
   onUpdateLabel: (label: string) => void
   onAddFile: () => void
   onDropFile: (file: File) => void
+  onCtrlClick?: () => void
 }
 
 /* ── Constants ── */
@@ -38,12 +40,14 @@ interface GridCellProps {
 const MIN_SCALE = 0.1
 const MAX_SCALE = 10
 const SCROLL_STEP = 0.05
+const SNAP_THRESHOLD = 8
 
 /* ── Component ── */
 
 export const GridCell = memo(function GridCell({
   cell,
   isSelected,
+  isMultiSelected,
   cellWidth,
   cellHeight,
   onSelect,
@@ -56,6 +60,7 @@ export const GridCell = memo(function GridCell({
   onUpdateLabel,
   onAddFile,
   onDropFile,
+  onCtrlClick,
 }: GridCellProps) {
   const dragRef = useRef<{
     startX: number
@@ -96,6 +101,17 @@ export const GridCell = memo(function GridCell({
     contentTop = (cellHeight - displayH) / 2
   }
 
+  /* ── Snap guide state ── */
+
+  const [snapGuide, setSnapGuide] = useState<{ x: boolean; y: boolean } | null>(null)
+  const snapGuideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showSnapGuide = useCallback((axes: { x: boolean; y: boolean }) => {
+    if (snapGuideTimer.current) clearTimeout(snapGuideTimer.current)
+    setSnapGuide(axes)
+    snapGuideTimer.current = setTimeout(() => setSnapGuide(null), 300)
+  }, [])
+
   /* ── Pointer drag for content nudging ── */
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
@@ -115,8 +131,46 @@ export const GridCell = memo(function GridCell({
     if (!dragRef.current) return
     const dx = e.clientX - dragRef.current.startX
     const dy = e.clientY - dragRef.current.startY
-    onUpdateOffset(dragRef.current.startOffsetX + dx, dragRef.current.startOffsetY + dy)
-  }, [onUpdateOffset])
+    let newX = dragRef.current.startOffsetX + dx
+    let newY = dragRef.current.startOffsetY + dy
+
+    // Snap-to-position: compute snap targets based on current display dimensions
+    // Snap targets are offset values that align content to meaningful positions
+    const snapTargetsX = [
+      0,                              // center
+      -(displayW - cellWidth) / 2,    // left edge flush
+      (displayW - cellWidth) / 2,     // right edge flush
+    ]
+    const snapTargetsY = [
+      0,                              // center
+      -(displayH - cellHeight) / 2,   // top edge flush
+      (displayH - cellHeight) / 2,    // bottom edge flush
+    ]
+
+    let snappedX = false
+    let snappedY = false
+
+    for (const sx of snapTargetsX) {
+      if (Math.abs(newX - sx) < SNAP_THRESHOLD) {
+        newX = sx
+        snappedX = true
+        break
+      }
+    }
+    for (const sy of snapTargetsY) {
+      if (Math.abs(newY - sy) < SNAP_THRESHOLD) {
+        newY = sy
+        snappedY = true
+        break
+      }
+    }
+
+    if (snappedX || snappedY) {
+      showSnapGuide({ x: snappedX, y: snappedY })
+    }
+
+    onUpdateOffset(newX, newY)
+  }, [onUpdateOffset, displayW, displayH, cellWidth, cellHeight, showSnapGuide])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (!dragRef.current) return
@@ -221,7 +275,7 @@ export const GridCell = memo(function GridCell({
       ref={cellRef}
       className={`
         relative overflow-hidden
-        ${isSelected ? 'ring-2 ring-[#F47B20] z-10' : ''}
+        ${isSelected ? 'ring-2 ring-[#F47B20] z-10' : isMultiSelected ? 'ring-2 ring-[#3B82F6] z-10' : ''}
       `}
       title={hasContent ? cell.file?.name ?? '' : ''}
       style={{
@@ -229,7 +283,11 @@ export const GridCell = memo(function GridCell({
         height: cellHeight,
         backgroundColor: hasContent ? 'var(--color-dark-base, #00171F)' : '#ffffff',
       }}
-      onClick={(e) => { e.stopPropagation(); onSelect() }}
+      onClick={(e) => {
+        e.stopPropagation()
+        if ((e.ctrlKey || e.metaKey) && onCtrlClick) { onCtrlClick(); return }
+        onSelect()
+      }}
       onContextMenu={onContextMenu}
       onDragOver={handleCellDragOver}
       onDragEnter={handleCellDragEnter}
@@ -343,6 +401,18 @@ export const GridCell = memo(function GridCell({
             >
               <X size={12} />
             </button>
+          )}
+        </div>
+      )}
+
+      {/* Snap guide crosshair */}
+      {snapGuide && (
+        <div className="absolute inset-0 pointer-events-none z-20" style={{ animation: 'snapFade 300ms ease-out forwards' }}>
+          {snapGuide.x && (
+            <div className="absolute top-0 bottom-0 left-1/2 w-px border-l border-dashed border-white/50" />
+          )}
+          {snapGuide.y && (
+            <div className="absolute left-0 right-0 top-1/2 h-px border-t border-dashed border-white/50" />
           )}
         </div>
       )}

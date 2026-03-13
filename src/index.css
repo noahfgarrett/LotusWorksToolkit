@@ -281,3 +281,9 @@
   .stagger-4 { animation-delay: 225ms; }
   .stagger-5 { animation-delay: 300ms; }
 }
+
+/* Grid Stitch snap guide fade */
+@keyframes snapFade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

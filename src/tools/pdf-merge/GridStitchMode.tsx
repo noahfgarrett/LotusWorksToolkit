@@ -11,7 +11,7 @@ import { GridCell } from './GridCell.tsx'
 import type { GridCellData } from './GridCell.tsx'
 import {
   Download, Trash2, Plus, Grid3X3, ZoomIn, ZoomOut, X, Check, Eye, EyeOff, Tag,
-  Undo2, Redo2, LayoutGrid, Columns, Rows,
+  Undo2, Redo2, LayoutGrid, Columns, Rows, Copy, ArrowLeft, Scan,
 } from 'lucide-react'
 
 import '@/utils/pdfWorkerSetup.ts'
@@ -295,6 +295,10 @@ export default function GridStitchMode() {
   // Focus mode state
   const [focusCellId, setFocusCellId] = useState<string | null>(null)
 
+  // Multi-select & region focus state
+  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  const [regionFocusIds, setRegionFocusIds] = useState<string[] | null>(null)
+
   // Container measurement
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
@@ -560,6 +564,40 @@ export default function GridStitchMode() {
     setSelectedCellId(null)
   }, [cells, rows, cols, pushUndo])
 
+  /* ── Apply zoom to all ── */
+
+  const applyZoomToAll = useCallback(() => {
+    if (!selectedCellId) return
+    const sourceCell = cells.find(c => c.id === selectedCellId)
+    if (!sourceCell || !sourceCell.file) return
+    pushUndo()
+    setCells(prev => prev.map(c => {
+      if (c.id === selectedCellId || !c.file) return c
+      return { ...c, scale: sourceCell.scale, offsetX: sourceCell.offsetX, offsetY: sourceCell.offsetY }
+    }))
+  }, [selectedCellId, cells, pushUndo])
+
+  /* ── Multi-select handlers ── */
+
+  const toggleMultiSelect = useCallback((cellId: string) => {
+    setMultiSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(cellId)) next.delete(cellId)
+      else next.add(cellId)
+      return next
+    })
+  }, [])
+
+  const enterRegionFocus = useCallback(() => {
+    if (multiSelected.size < 2) return
+    setRegionFocusIds(Array.from(multiSelected))
+  }, [multiSelected])
+
+  const exitRegionFocus = useCallback(() => {
+    setRegionFocusIds(null)
+    setMultiSelected(new Set())
+  }, [])
+
   /* ── Arrow key nudging ── */
 
   useEffect(() => {
@@ -581,6 +619,8 @@ export default function GridStitchMode() {
 
       if (e.key === 'Escape') {
         if (focusCellId) { setFocusCellId(null); return }
+        if (regionFocusIds) { exitRegionFocus(); return }
+        if (multiSelected.size > 0) { setMultiSelected(new Set()); return }
         setSelectedCellId(null)
         setCtxMenu(null)
         return
@@ -626,7 +666,7 @@ export default function GridStitchMode() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedCellId, focusCellId, cells, undo, redo, clearCell])
+  }, [selectedCellId, focusCellId, regionFocusIds, multiSelected, cells, undo, redo, clearCell, exitRegionFocus])
 
   /* ── Context menu ── */
 
@@ -1010,6 +1050,30 @@ export default function GridStitchMode() {
           </button>
         </div>
 
+        {/* Apply zoom to all */}
+        {selectedCellId && cells.find(c => c.id === selectedCellId)?.file && occupiedCells.length > 1 && (
+          <button
+            onClick={applyZoomToAll}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-white/[0.04] text-white/50 hover:text-white hover:bg-white/[0.08] transition-colors"
+            title="Apply this cell's zoom, pan, and offset to all other filled cells"
+          >
+            <Copy size={12} />
+            Apply zoom to all
+          </button>
+        )}
+
+        {/* Focus region */}
+        {multiSelected.size >= 2 && (
+          <button
+            onClick={enterRegionFocus}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-[#3B82F6]/20 text-[#3B82F6] hover:bg-[#3B82F6]/30 transition-colors"
+            title="Focus on selected cells in a zoomed view"
+          >
+            <Scan size={12} />
+            Focus region ({multiSelected.size})
+          </button>
+        )}
+
         <div className="flex-1" />
 
         <Button
@@ -1134,7 +1198,13 @@ export default function GridStitchMode() {
       <div
         ref={containerRef}
         className="flex-1 min-h-0 overflow-hidden relative"
-        onClick={() => { setSelectedCellId(null); setCtxMenu(null) }}
+        onClick={(e) => {
+          if (!e.ctrlKey && !e.metaKey) {
+            setSelectedCellId(null)
+            setCtxMenu(null)
+            setMultiSelected(new Set())
+          }
+        }}
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes('Files')) {
             e.preventDefault()
@@ -1167,6 +1237,7 @@ export default function GridStitchMode() {
                 key={cell.id}
                 cell={cell}
                 isSelected={selectedCellId === cell.id}
+                isMultiSelected={multiSelected.has(cell.id)}
                 cellWidth={cellWidth}
                 cellHeight={cellHeight}
                 onSelect={() => setSelectedCellId(cell.id)}
@@ -1179,6 +1250,7 @@ export default function GridStitchMode() {
                 onUpdateLabel={(label) => handleUpdateLabel(cell.id, label)}
                 onAddFile={() => replaceCell(cell.id)}
                 onDropFile={(file) => dropFileIntoCell(cell.id, file)}
+                onCtrlClick={() => toggleMultiSelect(cell.id)}
               />
             ))}
             </div>
@@ -1276,6 +1348,117 @@ export default function GridStitchMode() {
         )
       })()}
 
+      {/* Region focus overlay */}
+      {regionFocusIds && (() => {
+        // Compute the bounding rectangle of selected cells
+        const regionCells = regionFocusIds
+          .map(id => {
+            const idx = cells.findIndex(c => c.id === id)
+            if (idx === -1) return null
+            return { cell: cells[idx], row: Math.floor(idx / cols), col: idx % cols }
+          })
+          .filter((x): x is { cell: GridCellData; row: number; col: number } => x !== null)
+
+        if (regionCells.length < 2) return null
+
+        const minRow = Math.min(...regionCells.map(c => c.row))
+        const maxRow = Math.max(...regionCells.map(c => c.row))
+        const minCol = Math.min(...regionCells.map(c => c.col))
+        const maxCol = Math.max(...regionCells.map(c => c.col))
+        const regionRows = maxRow - minRow + 1
+        const regionCols = maxCol - minCol + 1
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Region toolbar */}
+            <div className="flex items-center gap-3 px-4 py-3 bg-[#00171F] border-b border-white/[0.08] flex-shrink-0">
+              <Scan size={16} className="text-[#3B82F6]" />
+              <span className="text-sm font-semibold text-[#3B82F6]">Region Focus</span>
+              <span className="text-xs text-white/40">{regionCells.length} cells ({regionRows}×{regionCols} area)</span>
+
+              <div className="flex-1" />
+
+              <button
+                onClick={exitRegionFocus}
+                className="px-3 py-1.5 rounded-md bg-[#3B82F6] text-white text-sm font-medium hover:bg-[#2563EB] transition-colors flex items-center gap-1.5"
+              >
+                <ArrowLeft size={14} />
+                Back to grid
+              </button>
+            </div>
+
+            {/* Region grid — same controls, just showing fewer cells at larger size */}
+            <div className="flex-1 min-h-0 overflow-hidden flex items-center justify-center p-4">
+              {(() => {
+                // Compute cell size for the region view
+                const regionContainerW = containerSize.width > 0 ? containerSize.width - 32 : 600
+                const regionContainerH = containerSize.height > 0 ? containerSize.height - 32 : 400
+                const regionGap = showGridlines ? GRIDLINE_WIDTH : 0
+                const regionBorder = showGridlines ? GRIDLINE_WIDTH : 0
+                const totalGapW = (regionCols - 1) * regionGap + regionBorder * 2
+                const totalGapH = (regionRows - 1) * regionGap + regionBorder * 2
+                const regionCellSize = Math.min(
+                  (regionContainerW - totalGapW) / regionCols,
+                  (regionContainerH - totalGapH) / regionRows,
+                )
+
+                // Build the subset of cells to display in grid order
+                const regionGrid: GridCellData[] = []
+                for (let r = minRow; r <= maxRow; r++) {
+                  for (let c = minCol; c <= maxCol; c++) {
+                    regionGrid.push(cells[r * cols + c])
+                  }
+                }
+
+                return (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: `repeat(${regionCols}, ${regionCellSize}px)`,
+                      gridTemplateRows: `repeat(${regionRows}, ${regionCellSize}px)`,
+                      gap: showGridlines ? `${GRIDLINE_WIDTH}px` : '0px',
+                      backgroundColor: showGridlines ? GRIDLINE_COLOR : 'transparent',
+                      border: showGridlines ? `${GRIDLINE_WIDTH}px solid ${GRIDLINE_COLOR}` : 'none',
+                    }}
+                  >
+                    {regionGrid.map(cell => (
+                      <GridCell
+                        key={cell.id}
+                        cell={cell}
+                        isSelected={selectedCellId === cell.id}
+                        isMultiSelected={false}
+                        cellWidth={regionCellSize}
+                        cellHeight={regionCellSize}
+                        onSelect={() => setSelectedCellId(cell.id)}
+                        onUpdateOffset={(ox, oy) => handleUpdateOffset(cell.id, ox, oy)}
+                        onUpdateScale={(s) => handleUpdateScale(cell.id, s)}
+                        onSwapStart={setSwapSourceId}
+                        onSwapDrop={handleSwapCells}
+                        onContextMenu={(e) => handleContextMenu(e, cell.id)}
+                        onFocus={() => { setFocusCellId(cell.id); setSelectedCellId(cell.id) }}
+                        onUpdateLabel={(label) => handleUpdateLabel(cell.id, label)}
+                        onAddFile={() => replaceCell(cell.id)}
+                        onDropFile={(file) => dropFileIntoCell(cell.id, file)}
+                      />
+                    ))}
+                  </div>
+                )
+              })()}
+            </div>
+
+            {/* Region footer */}
+            <div className="px-4 py-2 bg-[#00171F] border-t border-white/[0.08] flex-shrink-0">
+              <p className="text-[10px] text-white/30 text-center">
+                Esc to return to full grid &middot; All normal controls work here
+              </p>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Context menu */}
       {ctxMenu && (() => {
         const cell = cells.find(c => c.id === ctxMenu.cellId)
@@ -1300,6 +1483,14 @@ export default function GridStitchMode() {
                 >
                   Focus view
                 </button>
+                {multiSelected.size >= 2 && (
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-sm text-[#3B82F6] hover:bg-white/[0.08] transition-colors"
+                    onClick={() => { enterRegionFocus(); setCtxMenu(null) }}
+                  >
+                    Focus region ({multiSelected.size} cells)
+                  </button>
+                )}
                 <button
                   className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.08] transition-colors"
                   onClick={() => { clearCell(ctxMenu.cellId); setCtxMenu(null) }}
@@ -1322,7 +1513,7 @@ export default function GridStitchMode() {
 
       {/* Footer hint */}
       <p className="text-[10px] text-white/25 text-center flex-shrink-0">
-        Tab to cycle cells &middot; Arrow keys nudge (Shift for 10px) &middot; Delete to clear &middot; Ctrl+Z/Y undo/redo &middot; Drag label to swap &middot; Right-click for options
+        Tab to cycle cells &middot; Arrow keys nudge (Shift for 10px) &middot; Delete to clear &middot; Ctrl+Z/Y undo/redo &middot; Ctrl+click to multi-select &middot; Drag label to swap &middot; Right-click for options
       </p>
     </div>
   )
