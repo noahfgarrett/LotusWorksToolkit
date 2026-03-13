@@ -5,6 +5,7 @@ import { Modal } from '@/components/common/Modal.tsx'
 import { ColorPicker } from '@/components/common/ColorPicker.tsx'
 import { useAppStore } from '@/stores/appStore.ts'
 import { loadPDFFile, renderPageToCanvas, generateThumbnail, removePDFFromCache, getPDFBytes, extractPositionedText, getAllPageDimensions } from '@/utils/pdf.ts'
+import Tesseract from 'tesseract.js'
 import { downloadBlob } from '@/utils/download.ts'
 import { saveSession, loadSession, clearSession, computeFileHash } from './storage.ts'
 import type { PdfAnnotateSession } from './storage.ts'
@@ -173,6 +174,9 @@ export default function PdfAnnotateTool() {
   const [findIdx, setFindIdx] = useState(0)
   const [findCacheTick, setFindCacheTick] = useState(0)
   const [findCaseSensitive, setFindCaseSensitive] = useState(false)
+  const [ocrScanning, setOcrScanning] = useState(false)
+  const ocrPagesRef = useRef<Set<string>>(new Set()) // tracks pages that needed OCR (cache keys)
+  const ocrAbortRef = useRef<AbortController | null>(null)
   const [stampDropdownOpen, setStampDropdownOpen] = useState(false)
   const [activeStampPreset, setActiveStampPreset] = useState(STAMP_PRESETS[0])
   const [cropRegions, setCropRegions] = useState<Record<number, { x: number; y: number; w: number; h: number }>>({})
@@ -1074,6 +1078,9 @@ export default function PdfAnnotateTool() {
       measureStartRef.current = null
       measurePreviewRef.current = null
       textItemsCacheRef.current = {}
+      ocrPagesRef.current = new Set()
+      ocrAbortRef.current?.abort()
+      setOcrScanning(false)
       selectTextStartRef.current = null
       selectTextRectsRef.current = []
       setSelectTextToolbar(null)
@@ -1510,7 +1517,7 @@ export default function PdfAnnotateTool() {
         // Close context menu
         if (contextMenu) { setContextMenu(null); return }
         // Close find bar
-        if (findOpen) { setFindOpen(false); setFindQuery(''); setFindMatches([]); return }
+        if (findOpen) { setFindOpen(false); setFindQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false); return }
         // Clear text selection toolbar
         if (selectTextToolbar) {
           setSelectTextToolbar(null); selectTextStartRef.current = null; selectTextRectsRef.current = []; redrawAll(); return
@@ -1939,6 +1946,8 @@ export default function PdfAnnotateTool() {
   }, [shapesDropdownOpen, textDropdownOpen, zoomDropdownOpen, stampDropdownOpen])
 
   // ── Cache text items for text highlight and find ───────────────
+  // Phase 1: extract embedded text via pdf.js. Phase 2 (OCR): if a page has
+  // no embedded text and find is open, fall back to Tesseract.js OCR.
 
   useEffect(() => {
     if (!pdfFile || (activeTool !== 'textHighlight' && activeTool !== 'textStrikethrough' && activeTool !== 'select' && !findOpen)) return
@@ -1946,10 +1955,14 @@ export default function PdfAnnotateTool() {
     const pagesToCache = findOpen
       ? Array.from({ length: pdfFile.pageCount }, (_, i) => i + 1)
       : Array.from(renderedPagesRef.current)
+    const pagesNeedingOcr: { pageNum: number; rotation: number; cacheKey: string }[] = []
+
+    let pending = 0
     for (const pageNum of pagesToCache) {
       const rotation = pageRotations[pageNum] || 0
       const cacheKey = `${pageNum}_${rotation}`
       if (textItemsCacheRef.current[cacheKey]) continue
+      pending++
       extractPositionedText(pdfFile, pageNum, rotation).then(result => {
         // Evict oldest entries if cache grows beyond 200 (safety cap for large multi-rotation PDFs)
         const keys = Object.keys(textItemsCacheRef.current)
@@ -1959,9 +1972,101 @@ export default function PdfAnnotateTool() {
         }
         textItemsCacheRef.current[cacheKey] = result.items
         if (findOpen) setFindCacheTick(t => t + 1)
-      }).catch(() => {})
+
+        // If page has very little embedded text, queue for OCR fallback
+        const totalChars = result.items.reduce((sum, it) => sum + it.text.length, 0)
+        if (totalChars < 20 && findOpen && !ocrPagesRef.current.has(cacheKey)) {
+          pagesNeedingOcr.push({ pageNum, rotation, cacheKey })
+        }
+      }).catch(() => {}).finally(() => {
+        pending--
+        // Once all pdf.js extractions are done, kick off OCR for pages that need it
+        if (pending === 0 && pagesNeedingOcr.length > 0 && findOpen) {
+          runOcrFallback(pagesNeedingOcr)
+        }
+      })
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfFile, activeTool, pageRotations, dimsReady, findOpen])
+
+  // ── OCR fallback for scanned pages ─────────────────
+  const runOcrFallback = useCallback(async (
+    pages: { pageNum: number; rotation: number; cacheKey: string }[],
+  ) => {
+    if (!pdfFile || pages.length === 0) return
+
+    // Abort any previous OCR run
+    ocrAbortRef.current?.abort()
+    const abort = new AbortController()
+    ocrAbortRef.current = abort
+
+    setOcrScanning(true)
+    const canvas = document.createElement('canvas')
+    let worker: Tesseract.Worker | null = null
+
+    try {
+      worker = await Tesseract.createWorker('eng')
+      if (abort.signal.aborted) { await worker.terminate(); return }
+
+      const renderScale = 2.0
+      for (const { pageNum, rotation, cacheKey } of pages) {
+        if (abort.signal.aborted) break
+        ocrPagesRef.current.add(cacheKey)
+
+        try {
+          // Render page at 2x for good OCR quality
+          await renderPageToCanvas(pdfFile, pageNum, canvas, renderScale, rotation)
+          if (abort.signal.aborted) break
+
+          // Request blocks output to get word-level bounding boxes
+          const result = await worker.recognize(canvas, {}, { blocks: true, text: true })
+          if (abort.signal.aborted) break
+
+          // Parse blocks → paragraphs → lines → words
+          const items: { text: string; x: number; y: number; width: number; height: number; page: number }[] = []
+          const blocks = result.data.blocks
+          if (blocks) {
+            for (const block of blocks) {
+              for (const para of block.paragraphs) {
+                for (const line of para.lines) {
+                  for (const word of line.words) {
+                    if (!word.text.trim()) continue
+                    items.push({
+                      text: word.text,
+                      x: word.bbox.x0 / renderScale,
+                      y: word.bbox.y0 / renderScale,
+                      width: (word.bbox.x1 - word.bbox.x0) / renderScale,
+                      height: (word.bbox.y1 - word.bbox.y0) / renderScale,
+                      page: pageNum,
+                    })
+                  }
+                }
+              }
+            }
+          }
+
+          if (items.length > 0) {
+            textItemsCacheRef.current[cacheKey] = items
+            setFindCacheTick(t => t + 1)
+          }
+        } catch {
+          // OCR failed for this page — skip silently
+        }
+      }
+    } catch {
+      // Worker creation failed — skip OCR entirely
+    } finally {
+      if (worker) await worker.terminate().catch(() => {})
+      canvas.width = 0
+      canvas.height = 0
+      if (!abort.signal.aborted) setOcrScanning(false)
+    }
+  }, [pdfFile])
+
+  // Clean up OCR on unmount or file change
+  useEffect(() => {
+    return () => { ocrAbortRef.current?.abort() }
+  }, [pdfFile])
 
   // ── Focus textarea when editing ──────────────────────
 
@@ -2149,10 +2254,15 @@ export default function PdfAnnotateTool() {
             }
             return
           }
-          // Click inside selected text/callout body → enter edit mode immediately
+          // Click inside selected text/callout body → start move drag;
+          // if it turns out to be a click (no significant movement), enter edit mode on pointerUp
           if (hitTest(pt, ann, 4 / zoom)) {
-            setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
-            enterEditMode(ann.id)
+            isDrawingRef.current = true
+            textDragRef.current = {
+              annId: ann.id, mode: 'move', startPt: pt,
+              origPoints: [...ann.points], origWidth: ann.width, origHeight: ann.height,
+              origArrows: ann.arrows ? [...ann.arrows] : undefined,
+            }
             return
           }
         }
@@ -2184,13 +2294,19 @@ export default function PdfAnnotateTool() {
           setSubscript(hitAnn.subscript || false)
           setListType(hitAnn.listType || 'none')
         }
-        // Click text/callout → first click selects, clicking again enters edit mode
+        // Click text/callout → first click selects (grab cursor), double-click enters edit mode
         if (hitAnn.type === 'text' || hitAnn.type === 'callout') {
-          // Already selected → enter edit mode immediately
-          // (won't normally reach here since selected path above handles it,
-          //  but kept as fallback)
-          setActiveTool(hitAnn.type === 'callout' ? 'callout' : 'text')
-          enterEditMode(hitAnn.id)
+          if (isDoubleClick) {
+            // Double-click: enter edit mode immediately
+            setActiveTool(hitAnn.type === 'callout' ? 'callout' : 'text')
+            enterEditMode(hitAnn.id)
+          } else {
+            // Single-click: select — start move drag so the user can drag to reposition
+            isDrawingRef.current = true
+            generalDragRef.current = {
+              annId: hitAnn.id, startPt: pt, origPoints: [...hitAnn.points],
+            }
+          }
           return
         }
         // For non-text annotations, start general move drag
@@ -3089,6 +3205,19 @@ export default function PdfAnnotateTool() {
     // Select tool: commit text/callout drag or finalize text selection
     if (activeTool === 'select') {
       if (textDragRef.current) {
+        const drag = textDragRef.current
+        const ann = (annotations[ap] || []).find(a => a.id === drag.annId)
+        // Detect click (no significant movement) → enter edit mode for text/callout
+        if (ann && drag.mode === 'move' && (ann.type === 'text' || ann.type === 'callout')) {
+          const moved = Math.hypot(ann.points[0].x - drag.origPoints[0].x, ann.points[0].y - drag.origPoints[0].y)
+          if (moved < 2) {
+            // Was a click, not a drag → enter edit mode
+            textDragRef.current = null
+            setActiveTool(ann.type === 'callout' ? 'callout' : 'text')
+            enterEditMode(ann.id)
+            return
+          }
+        }
         pushHistory(structuredClone(annotations))
         textDragRef.current = null
         return
@@ -4181,7 +4310,7 @@ export default function PdfAnnotateTool() {
           </div>
         )}
         <Button size="sm" onClick={() => setExportModalOpen(true)} disabled={isExporting} icon={<Download size={12} />}>
-          {isExporting ? 'Exporting...' : 'Export'}
+          {isExporting ? 'Exporting...' : 'Export PDF'}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => setEmailModalOpen(true)} icon={<Mail size={12} />}>
           Email
@@ -4238,15 +4367,18 @@ export default function PdfAnnotateTool() {
                 if (e.shiftKey) setFindIdx(i => (i - 1 + findMatches.length) % findMatches.length)
                 else setFindIdx(i => (i + 1) % findMatches.length)
               }
-              if (e.key === 'Escape') { setFindOpen(false); setFindQuery(''); setFindMatches([]) }
+              if (e.key === 'Escape') { setFindOpen(false); setFindQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false) }
             }}
             className="flex-1 bg-transparent text-xs text-white outline-none placeholder:text-white/30"
           />
           {findMatches.length > 0 && (
             <span className="text-xs text-white/40 flex-shrink-0">{findIdx + 1} / {findMatches.length}</span>
           )}
-          {findQuery && findMatches.length === 0 && (
+          {findQuery && findMatches.length === 0 && !ocrScanning && (
             <span className="text-xs text-red-400/70 flex-shrink-0">No matches</span>
+          )}
+          {ocrScanning && (
+            <span className="text-xs text-[#F47B20]/70 flex-shrink-0 animate-pulse">OCR scanning...</span>
           )}
           <button
             onClick={() => setFindCaseSensitive(v => !v)}
@@ -4263,7 +4395,7 @@ export default function PdfAnnotateTool() {
             className="p-0.5 text-white/40 hover:text-white disabled:opacity-30 rounded">
             <ChevronRight size={12} />
           </button>
-          <button onClick={() => { setFindOpen(false); setFindQuery(''); setFindMatches([]) }} className="p-0.5 text-white/40 hover:text-white rounded">
+          <button onClick={() => { setFindOpen(false); setFindQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false) }} className="p-0.5 text-white/40 hover:text-white rounded">
             <X size={12} />
           </button>
         </div>

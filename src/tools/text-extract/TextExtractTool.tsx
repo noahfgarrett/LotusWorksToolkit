@@ -86,25 +86,39 @@ async function ocrPositionedText(
 ): Promise<PositionedText[]> {
   const renderScale = 2.0
   await renderPageToCanvas(pdfFile, pageNumber, canvas, renderScale)
-  const result = await Tesseract.recognize(canvas, language, {
+  const worker = await Tesseract.createWorker(language, undefined, {
     logger: (m: { status: string; progress?: number }) => {
       if (m.status === 'recognizing text' && onProgress) {
         onProgress(m.progress ?? 0)
       }
     },
   })
-  const data = result.data as unknown as {
-    words?: Array<{ text: string; bbox: { x0: number; y0: number; x1: number; y1: number } }>
+  const result = await worker.recognize(canvas, {}, { blocks: true, text: true })
+  await worker.terminate()
+
+  // Parse blocks → paragraphs → lines → words for positioned text
+  const items: PositionedText[] = []
+  const blocks = result.data.blocks
+  if (blocks) {
+    for (const block of blocks) {
+      for (const para of block.paragraphs) {
+        for (const line of para.lines) {
+          for (const word of line.words) {
+            if (!word.text.trim()) continue
+            items.push({
+              text: word.text,
+              x: word.bbox.x0 / renderScale,
+              y: word.bbox.y0 / renderScale,
+              width: (word.bbox.x1 - word.bbox.x0) / renderScale,
+              height: (word.bbox.y1 - word.bbox.y0) / renderScale,
+              page: pageNumber,
+            })
+          }
+        }
+      }
+    }
   }
-  const words = data.words ?? []
-  return words.map((w) => ({
-    text: w.text,
-    x: w.bbox.x0 / renderScale,
-    y: w.bbox.y0 / renderScale,
-    width: (w.bbox.x1 - w.bbox.x0) / renderScale,
-    height: (w.bbox.y1 - w.bbox.y0) / renderScale,
-    page: pageNumber,
-  }))
+  return items
 }
 
 // ── Table extraction algorithm ─────────────────────
