@@ -1040,11 +1040,11 @@ export default function GridStitchMode() {
         }
       }
 
-      // Draw labels on top of everything
+      // Draw labels — large, centered, mostly transparent (watermark-style)
       if (exportLabels) {
         const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
-        const labelSize = Math.max(8, Math.min(24, exportCellSize * 0.035))
-        const padding = labelSize * 0.5
+        // Scale label to ~25% of cell size, capped at reasonable bounds
+        const labelSize = Math.max(24, Math.min(exportCellSize * 0.25, 200))
 
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
@@ -1058,28 +1058,18 @@ export default function GridStitchMode() {
             const textWidth = font.widthOfTextAtSize(labelText, labelSize)
             const textHeight = labelSize
 
-            // Position: top-left of cell
-            const lx = cellX + padding
-            const ly = totalHeight - cellYFromTop - padding - textHeight
+            // Center label in cell
+            const lx = cellX + (exportCellSize - textWidth) / 2
+            const ly = totalHeight - cellYFromTop - (exportCellSize + textHeight) / 2
 
-            // Draw label background
-            const bgPad = 2
-            page.drawRectangle({
-              x: lx - bgPad,
-              y: ly - bgPad,
-              width: textWidth + bgPad * 2,
-              height: textHeight + bgPad * 2,
-              color: rgb(0, 0, 0),
-              opacity: 0.5,
-            })
-
-            // Draw label text
+            // Draw label text — mostly transparent
             page.drawText(labelText, {
               x: lx,
               y: ly,
               size: labelSize,
               font,
-              color: rgb(1, 1, 1),
+              color: rgb(0, 0, 0),
+              opacity: 0.15,
             })
           }
         }
