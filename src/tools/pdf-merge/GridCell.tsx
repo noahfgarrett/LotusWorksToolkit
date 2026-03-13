@@ -223,6 +223,7 @@ export const GridCell = memo(function GridCell({
         relative overflow-hidden
         ${isSelected ? 'ring-2 ring-[#F47B20] z-10' : ''}
       `}
+      title={hasContent ? cell.file?.name ?? '' : ''}
       style={{
         width: cellWidth,
         height: cellHeight,

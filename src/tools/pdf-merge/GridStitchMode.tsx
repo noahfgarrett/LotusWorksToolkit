@@ -11,6 +11,7 @@ import { GridCell } from './GridCell.tsx'
 import type { GridCellData } from './GridCell.tsx'
 import {
   Download, Trash2, Plus, Grid3X3, ZoomIn, ZoomOut, X, Check, Eye, EyeOff, Tag,
+  Undo2, Redo2, LayoutGrid, Columns, Rows,
 } from 'lucide-react'
 
 import '@/utils/pdfWorkerSetup.ts'
@@ -35,6 +36,41 @@ const MAX_GRID_DIM = 15
 
 const GRIDLINE_WIDTH = 2
 const GRIDLINE_COLOR = '#ffffff'
+
+const GRID_PRESETS: { label: string; rows: number; cols: number }[] = [
+  { label: '2×2 Quadrant', rows: 2, cols: 2 },
+  { label: '3×3 Grid', rows: 3, cols: 3 },
+  { label: '4×4 Grid', rows: 4, cols: 4 },
+  { label: '1×2 Side-by-side', rows: 1, cols: 2 },
+  { label: '2×1 Stacked', rows: 2, cols: 1 },
+  { label: '1×3 Strip', rows: 1, cols: 3 },
+  { label: '3×1 Column', rows: 3, cols: 1 },
+  { label: '1×4 Detail row', rows: 1, cols: 4 },
+  { label: '3×2 Wide', rows: 3, cols: 2 },
+  { label: '2×3 Tall', rows: 2, cols: 3 },
+]
+
+type FillOrder = 'row' | 'column'
+
+interface ExportPageSize {
+  label: string
+  width: number  // in PDF points (72 pts = 1 inch)
+  height: number
+}
+
+const EXPORT_PAGE_SIZES: ExportPageSize[] = [
+  { label: 'Auto (fit content)', width: 0, height: 0 },
+  { label: 'Letter (8.5×11")', width: 612, height: 792 },
+  { label: 'Tabloid (11×17")', width: 792, height: 1224 },
+  { label: 'A4 (210×297mm)', width: 595, height: 842 },
+  { label: 'A3 (297×420mm)', width: 842, height: 1191 },
+  { label: 'A1 (594×841mm)', width: 1684, height: 2384 },
+  { label: 'A0 (841×1189mm)', width: 2384, height: 3370 },
+  { label: 'Arch D (24×36")', width: 1728, height: 2592 },
+  { label: 'Arch E (36×48")', width: 2592, height: 3456 },
+]
+
+const MAX_UNDO_HISTORY = 50
 
 /* ── Helpers ── */
 
@@ -214,6 +250,45 @@ export default function GridStitchMode() {
   const [exportProgress, setExportProgress] = useState(0)
   const [swapSourceId, setSwapSourceId] = useState<string | null>(null)
 
+  const [fillOrder, setFillOrder] = useState<FillOrder>('row')
+  const [exportPageSize, setExportPageSize] = useState(0) // index into EXPORT_PAGE_SIZES
+
+  // Undo/redo history
+  interface GridSnapshot { rows: number; cols: number; cells: GridCellData[] }
+  const undoStack = useRef<GridSnapshot[]>([])
+  const redoStack = useRef<GridSnapshot[]>([])
+  const [undoCounter, setUndoCounter] = useState(0)
+
+  const pushUndo = useCallback(() => {
+    undoStack.current.push({ rows, cols, cells: cells.map(c => ({ ...c })) })
+    if (undoStack.current.length > MAX_UNDO_HISTORY) undoStack.current.shift()
+    redoStack.current = []
+    setUndoCounter(c => c + 1)
+  }, [rows, cols, cells])
+
+  const undo = useCallback(() => {
+    const snap = undoStack.current.pop()
+    if (!snap) return
+    redoStack.current.push({ rows, cols, cells: cells.map(c => ({ ...c })) })
+    setRows(snap.rows)
+    setCols(snap.cols)
+    setCells(snap.cells)
+    setUndoCounter(c => c + 1)
+  }, [rows, cols, cells])
+
+  const redo = useCallback(() => {
+    const snap = redoStack.current.pop()
+    if (!snap) return
+    undoStack.current.push({ rows, cols, cells: cells.map(c => ({ ...c })) })
+    setRows(snap.rows)
+    setCols(snap.cols)
+    setCells(snap.cells)
+    setUndoCounter(c => c + 1)
+  }, [rows, cols, cells])
+
+  const canUndo = undoStack.current.length > 0
+  const canRedo = redoStack.current.length > 0
+
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; cellId: string } | null>(null)
 
@@ -240,6 +315,7 @@ export default function GridStitchMode() {
   /* ── Grid dimension changes ── */
 
   const handleDimensionChange = useCallback((newRows: number, newCols: number) => {
+    pushUndo()
     setCells(prev => {
       // Check if any occupied cells would be lost
       const wouldLose = prev.some((cell, idx) => {
@@ -280,7 +356,7 @@ export default function GridStitchMode() {
     setRows(newRows)
     setCols(newCols)
     setSelectedCellId(null)
-  }, [rows, cols])
+  }, [rows, cols, pushUndo])
 
   /* ── File upload & processing ── */
 
@@ -339,10 +415,21 @@ export default function GridStitchMode() {
       return
     }
 
-    // Find empty cells
+    // Find empty cells in fill order
     const emptyCellIds: string[] = []
-    for (const cell of cells) {
-      if (cell.file === null) emptyCellIds.push(cell.id)
+    if (fillOrder === 'column') {
+      // Column-first: top-to-bottom, then right
+      for (let c = 0; c < cols; c++) {
+        for (let r = 0; r < rows; r++) {
+          const cell = cells[r * cols + c]
+          if (cell.file === null) emptyCellIds.push(cell.id)
+        }
+      }
+    } else {
+      // Row-first (default): left-to-right, then down
+      for (const cell of cells) {
+        if (cell.file === null) emptyCellIds.push(cell.id)
+      }
     }
 
     const filesToProcess = validFiles.slice(0, emptyCellIds.length)
@@ -357,6 +444,7 @@ export default function GridStitchMode() {
 
     if (filesToProcess.length === 0) return
 
+    pushUndo()
     for (let i = 0; i < filesToProcess.length; i++) {
       const result = await processFile(filesToProcess[i])
       if (!result) continue
@@ -367,7 +455,7 @@ export default function GridStitchMode() {
           : c,
       ))
     }
-  }, [cells, processFile])
+  }, [cells, processFile, fillOrder, rows, cols, pushUndo])
 
   /* ── Cell actions ── */
 
@@ -384,16 +472,18 @@ export default function GridStitchMode() {
   }, [])
 
   const handleUpdateLabel = useCallback((cellId: string, label: string) => {
+    pushUndo()
     setCells(prev => prev.map(c =>
       c.id === cellId ? { ...c, label } : c,
     ))
-  }, [])
+  }, [pushUndo])
 
   const handleSwapCells = useCallback((targetId: string) => {
     if (!swapSourceId || swapSourceId === targetId) {
       setSwapSourceId(null)
       return
     }
+    pushUndo()
     setCells(prev => {
       const newCells = [...prev]
       const srcIdx = newCells.findIndex(c => c.id === swapSourceId)
@@ -413,21 +503,23 @@ export default function GridStitchMode() {
       return newCells
     })
     setSwapSourceId(null)
-  }, [swapSourceId])
+  }, [swapSourceId, pushUndo])
 
   const clearCell = useCallback((cellId: string) => {
+    pushUndo()
     setCells(prev => prev.map(c =>
       c.id === cellId
         ? { ...c, file: null, type: null, thumbnail: null, nativeWidth: 0, nativeHeight: 0, offsetX: 0, offsetY: 0, scale: 1 }
         : c,
     ))
-  }, [])
+  }, [pushUndo])
 
   const resetCellPosition = useCallback((cellId: string) => {
+    pushUndo()
     setCells(prev => prev.map(c =>
       c.id === cellId ? { ...c, offsetX: 0, offsetY: 0, scale: 1 } : c,
     ))
-  }, [])
+  }, [pushUndo])
 
   const replaceCell = useCallback((cellId: string) => {
     const input = document.createElement('input')
@@ -439,12 +531,13 @@ export default function GridStitchMode() {
       if (!file || !isAcceptedFile(file)) return
       const result = await processFile(file)
       if (!result) return
+      pushUndo()
       setCells(prev => prev.map(c =>
         c.id === cellId ? { ...c, ...result, offsetX: 0, offsetY: 0 } : c,
       ))
     }
     input.click()
-  }, [processFile])
+  }, [processFile, pushUndo])
 
   const dropFileIntoCell = useCallback(async (cellId: string, file: File) => {
     if (!isAcceptedFile(file)) {
@@ -453,26 +546,62 @@ export default function GridStitchMode() {
     }
     const result = await processFile(file)
     if (!result) return
+    pushUndo()
     setCells(prev => prev.map(c =>
       c.id === cellId ? { ...c, ...result, offsetX: 0, offsetY: 0 } : c,
     ))
-  }, [processFile])
+  }, [processFile, pushUndo])
 
   const clearAll = useCallback(() => {
     const hasContent = cells.some(c => c.file !== null)
     if (hasContent && !window.confirm('Clear all cells?')) return
+    pushUndo()
     setCells(buildEmptyGrid(rows, cols))
     setSelectedCellId(null)
-  }, [cells, rows, cols])
+  }, [cells, rows, cols, pushUndo])
 
   /* ── Arrow key nudging ── */
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't capture keys when editing an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
+
+      // Undo/Redo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault()
+        redo()
+        return
+      }
+
       if (e.key === 'Escape') {
         if (focusCellId) { setFocusCellId(null); return }
         setSelectedCellId(null)
         setCtxMenu(null)
+        return
+      }
+
+      // Tab to cycle through cells
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        const currentIdx = selectedCellId ? cells.findIndex(c => c.id === selectedCellId) : -1
+        const nextIdx = e.shiftKey
+          ? (currentIdx <= 0 ? cells.length - 1 : currentIdx - 1)
+          : (currentIdx + 1) % cells.length
+        setSelectedCellId(cells[nextIdx].id)
+        return
+      }
+
+      // Delete/Backspace to clear selected cell
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedCellId) {
+        e.preventDefault()
+        const cell = cells.find(c => c.id === selectedCellId)
+        if (cell?.file) clearCell(selectedCellId)
         return
       }
 
@@ -497,7 +626,7 @@ export default function GridStitchMode() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedCellId, focusCellId])
+  }, [selectedCellId, focusCellId, cells, undo, redo, clearCell])
 
   /* ── Context menu ── */
 
@@ -547,15 +676,27 @@ export default function GridStitchMode() {
 
       const pdfDoc = await PDFDocument.create()
 
-      // Square cells: find the largest native dimension to use as cell size
-      let maxNativeDim = 0
-      for (const cell of cells) {
-        if (cell.file) {
-          maxNativeDim = Math.max(maxNativeDim, cell.nativeWidth, cell.nativeHeight)
+      // Determine export cell size
+      const selectedSize = EXPORT_PAGE_SIZES[exportPageSize]
+      let exportCellSize: number
+
+      if (selectedSize && selectedSize.width > 0 && selectedSize.height > 0) {
+        // Fixed page size — derive cell size from page dimensions
+        const tempLineWidth = exportGridlines ? Math.max(1, 2) : 0
+        const availW = selectedSize.width - (exportGridlines ? (cols + 1) * tempLineWidth : 0)
+        const availH = selectedSize.height - (exportGridlines ? (rows + 1) * tempLineWidth : 0)
+        exportCellSize = Math.min(availW / cols, availH / rows)
+      } else {
+        // Auto: find the largest native dimension
+        let maxNativeDim = 0
+        for (const cell of cells) {
+          if (cell.file) {
+            maxNativeDim = Math.max(maxNativeDim, cell.nativeWidth, cell.nativeHeight)
+          }
         }
+        if (maxNativeDim === 0) maxNativeDim = 612
+        exportCellSize = maxNativeDim
       }
-      if (maxNativeDim === 0) maxNativeDim = 612 // letter width fallback
-      const exportCellSize = maxNativeDim
 
       // Grid line thickness in PDF points (scaled to be visible)
       const exportLineWidth = exportGridlines ? Math.max(1, exportCellSize * 0.003) : 0
@@ -779,7 +920,7 @@ export default function GridStitchMode() {
       setIsExporting(false)
       setExportProgress(0)
     }
-  }, [canExport, cells, rows, cols, compression, exportGridlines, exportLabels, showGridlines, containerSize, occupiedCells.length])
+  }, [canExport, cells, rows, cols, compression, exportGridlines, exportLabels, showGridlines, containerSize, occupiedCells.length, exportPageSize])
 
   /* ── Cell dimensions for rendering (always square) ── */
 
@@ -827,11 +968,47 @@ export default function GridStitchMode() {
           </select>
         </div>
 
+        {/* Grid presets */}
+        <select
+          value=""
+          onChange={(e) => {
+            const preset = GRID_PRESETS[Number(e.target.value)]
+            if (preset) handleDimensionChange(preset.rows, preset.cols)
+          }}
+          title="Grid presets"
+          className="h-8 px-2 text-xs rounded-md bg-dark-surface border border-white/[0.12] text-white/50 cursor-pointer"
+        >
+          <option value="" disabled>Presets</option>
+          {GRID_PRESETS.map((p, i) => (
+            <option key={i} value={i}>{p.label}</option>
+          ))}
+        </select>
+
         {hasAnyContent && (
           <span className="text-xs text-white/40">
             {occupiedCells.length}/{rows * cols} cells filled
           </span>
         )}
+
+        {/* Undo/Redo */}
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            className="p-1.5 rounded text-white/50 hover:text-white hover:bg-white/[0.08] disabled:opacity-25 disabled:pointer-events-none transition-colors"
+            title="Undo (Ctrl+Z)"
+          >
+            <Undo2 size={14} />
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            className="p-1.5 rounded text-white/50 hover:text-white hover:bg-white/[0.08] disabled:opacity-25 disabled:pointer-events-none transition-colors"
+            title="Redo (Ctrl+Y)"
+          >
+            <Redo2 size={14} />
+          </button>
+        </div>
 
         <div className="flex-1" />
 
@@ -922,6 +1099,30 @@ export default function GridStitchMode() {
         >
           Compress
         </button>
+
+        <div className="w-px h-4 bg-white/[0.08]" />
+
+        {/* Fill order toggle */}
+        <button
+          onClick={() => setFillOrder(prev => prev === 'row' ? 'column' : 'row')}
+          className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors bg-white/[0.04] text-white/40 hover:text-white/60`}
+          title={fillOrder === 'row' ? 'Fill order: left-to-right, top-to-bottom' : 'Fill order: top-to-bottom, left-to-right'}
+        >
+          {fillOrder === 'row' ? <Rows size={12} /> : <Columns size={12} />}
+          {fillOrder === 'row' ? 'Row fill' : 'Col fill'}
+        </button>
+
+        {/* Export page size */}
+        <select
+          value={exportPageSize}
+          onChange={(e) => setExportPageSize(Number(e.target.value))}
+          title="Export page size"
+          className="h-7 px-1.5 text-[11px] rounded-md bg-dark-surface border border-white/[0.12] text-white/50 cursor-pointer"
+        >
+          {EXPORT_PAGE_SIZES.map((s, i) => (
+            <option key={i} value={i}>{s.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Progress bar */}
@@ -1121,7 +1322,7 @@ export default function GridStitchMode() {
 
       {/* Footer hint */}
       <p className="text-[10px] text-white/25 text-center flex-shrink-0">
-        Click cell to select &middot; Drag content to reposition &middot; Arrow keys nudge (Shift for 10px) &middot; Drag label to swap cells &middot; Right-click for options
+        Tab to cycle cells &middot; Arrow keys nudge (Shift for 10px) &middot; Delete to clear &middot; Ctrl+Z/Y undo/redo &middot; Drag label to swap &middot; Right-click for options
       </p>
     </div>
   )
