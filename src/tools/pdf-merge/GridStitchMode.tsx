@@ -1068,6 +1068,12 @@ export default function GridStitchMode() {
               <>
                 <button
                   className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.08] transition-colors"
+                  onClick={() => { setFocusCellId(ctxMenu.cellId); setSelectedCellId(ctxMenu.cellId); setCtxMenu(null) }}
+                >
+                  Focus view
+                </button>
+                <button
+                  className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.08] transition-colors"
                   onClick={() => { clearCell(ctxMenu.cellId); setCtxMenu(null) }}
                 >
                   Clear cell
