@@ -170,7 +170,7 @@ export default function PdfAnnotateTool() {
   const [annListOpen, setAnnListOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [findOpen, setFindOpen] = useState(false)
-  const [findMatches, setFindMatches] = useState<{ pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[]>([])
+  const [findMatches, setFindMatches] = useState<{ pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number }; matchX: number; matchW: number }[]>([])
   const [findIdx, setFindIdx] = useState(0)
   const [findCacheTick, setFindCacheTick] = useState(0)
   const [findCaseSensitive, setFindCaseSensitive] = useState(false)
@@ -489,16 +489,15 @@ export default function PdfAnnotateTool() {
       }
     }
 
-    // Find highlights
+    // Find highlights — highlight only the matching substring, not the full word
     if (findMatches.length > 0) {
       ctx.save()
       for (let fi = 0; fi < findMatches.length; fi++) {
         const fm = findMatches[fi]
         if (fm.pageNum !== pageNum) continue
-        const item = fm.item
         ctx.globalAlpha = fi === findIdx ? 0.7 : 0.35
         ctx.fillStyle = fi === findIdx ? '#f97316' : '#facc15'
-        ctx.fillRect(item.x * rs, item.y * rs, item.width * rs, item.height * rs)
+        ctx.fillRect(fm.matchX * rs, fm.item.y * rs, fm.matchW * rs, fm.item.height * rs)
       }
       ctx.restore()
     }
@@ -1397,7 +1396,7 @@ export default function PdfAnnotateTool() {
       const refs = pageRefsMap.current.get(match.pageNum)
       if (!scrollEl || !refs) return
       const scale = RENDER_SCALE * zoomRef.current
-      const matchCenterX = match.item.x * scale + match.item.width * scale / 2
+      const matchCenterX = match.matchX * scale + match.matchW * scale / 2
       const matchCenterY = match.item.y * scale + match.item.height * scale / 2
       const canvasRect = refs.annCanvas.getBoundingClientRect()
       const scrollRect = scrollEl.getBoundingClientRect()
@@ -1416,12 +1415,18 @@ export default function PdfAnnotateTool() {
     setFindCommittedQuery(raw)
     if (!raw) { setFindMatches([]); setFindIdx(0); return }
     const q = findCaseSensitive ? raw : raw.toLowerCase()
-    const matches: { pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[] = []
+    const matches: { pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number }; matchX: number; matchW: number }[] = []
     for (const [key, items] of Object.entries(textItemsCacheRef.current)) {
       const pageNum = parseInt(key.split('_')[0])
       for (const item of items) {
         const text = findCaseSensitive ? item.text : item.text.toLowerCase()
-        if (text.includes(q)) matches.push({ pageNum, item })
+        const idx = text.indexOf(q)
+        if (idx === -1) continue
+        // Proportional substring position within the word
+        const charCount = text.length || 1
+        const matchX = item.x + (idx / charCount) * item.width
+        const matchW = (q.length / charCount) * item.width
+        matches.push({ pageNum, item, matchX, matchW })
       }
     }
     matches.sort((a, b) => a.pageNum - b.pageNum || a.item.y - b.item.y)
