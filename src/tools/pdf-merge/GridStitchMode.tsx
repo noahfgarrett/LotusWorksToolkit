@@ -9,9 +9,10 @@ import { loadImage, resizeImage, canvasToBlob } from '@/utils/imageProcessing.ts
 import { downloadBlob } from '@/utils/download.ts'
 import { GridCell } from './GridCell.tsx'
 import type { GridCellData } from './GridCell.tsx'
+import { alignGrid, alignPair } from './autoAlign.ts'
 import {
   Download, Trash2, Plus, Grid3X3, ZoomIn, ZoomOut, X, Check, Eye, EyeOff, Tag,
-  Undo2, Redo2, LayoutGrid, Columns, Rows, Copy, ArrowLeft, Scan,
+  Undo2, Redo2, LayoutGrid, Columns, Rows, Copy, ArrowLeft, Scan, Magnet,
 } from 'lucide-react'
 
 import '@/utils/pdfWorkerSetup.ts'
@@ -597,6 +598,112 @@ export default function GridStitchMode() {
     }))
   }, [selectedCellId, cells, pushUndo])
 
+  /* ── Cell dimensions for rendering (always square) ── */
+  /* (computed here so auto-align callbacks can use cellSize) */
+
+  const effectiveGap = showGridlines ? GRIDLINE_WIDTH : 0
+  const outerBorder = showGridlines ? GRIDLINE_WIDTH : 0
+  const totalGridlineW = (cols - 1) * effectiveGap + outerBorder * 2
+  const totalGridlineH = (rows - 1) * effectiveGap + outerBorder * 2
+  const maxCellW = containerSize.width > 0 ? (containerSize.width - totalGridlineW) / cols : 0
+  const maxCellH = containerSize.height > 0 ? (containerSize.height - totalGridlineH) / rows : 0
+  const cellSize = Math.min(maxCellW, maxCellH)
+  const cellWidth = cellSize
+  const cellHeight = cellSize
+
+  const occupiedCells = useMemo(() => cells.filter(c => c.file !== null), [cells])
+
+  /* ── Auto-align ── */
+
+  const [isAligning, setIsAligning] = useState(false)
+
+  const handleAutoAlign = useCallback(() => {
+    if (occupiedCells.length < 2) return
+
+    // Determine anchor
+    let anchorId = selectedCellId
+    if (!anchorId || !cells.find(c => c.id === anchorId)?.file) {
+      useAppStore.getState().addToast({ type: 'warning', message: 'Select a cell with content as the anchor first' })
+      return
+    }
+
+    pushUndo()
+    setIsAligning(true)
+
+    // Use requestAnimationFrame to let the UI update before heavy work
+    requestAnimationFrame(() => {
+      const result = alignGrid(cells, rows, cols, anchorId!, cellSize)
+
+      setCells(prev => prev.map(c => {
+        const adj = result.adjustments.get(c.id)
+        if (!adj) return c
+        return { ...c, offsetX: c.offsetX + adj.dx, offsetY: c.offsetY + adj.dy }
+      }))
+
+      setIsAligning(false)
+
+      if (result.alignedCount === 0 && result.skippedCount > 0) {
+        useAppStore.getState().addToast({
+          type: 'warning',
+          message: 'No matching edges found — try adjusting zoom or cell content',
+        })
+      } else {
+        const msg = result.skippedCount > 0
+          ? `Aligned ${result.alignedCount} pair${result.alignedCount !== 1 ? 's' : ''} (${result.skippedCount} skipped — low confidence)`
+          : `Aligned ${result.alignedCount} pair${result.alignedCount !== 1 ? 's' : ''} successfully`
+        useAppStore.getState().addToast({ type: 'success', message: msg })
+      }
+    })
+  }, [selectedCellId, cells, rows, cols, cellSize, occupiedCells.length, pushUndo])
+
+  const handleAlignWithNeighbor = useCallback((cellId: string, neighborId: string, adjacency: 'horizontal' | 'vertical') => {
+    const cell = cells.find(c => c.id === cellId)
+    const neighbor = cells.find(c => c.id === neighborId)
+    if (!cell?.file || !neighbor?.file) return
+
+    const cellIdx = cells.findIndex(c => c.id === cellId)
+    const neighborIdx = cells.findIndex(c => c.id === neighborId)
+    const cellCol = cellIdx % cols
+    const neighborCol = neighborIdx % cols
+    const cellRow = Math.floor(cellIdx / cols)
+    const neighborRow = Math.floor(neighborIdx / cols)
+
+    let result
+    if (adjacency === 'horizontal') {
+      // Determine which is left, which is right
+      const [leftCell, rightCell] = cellCol < neighborCol ? [cell, neighbor] : [neighbor, cell]
+      result = alignPair(leftCell, rightCell, cellSize, 'horizontal')
+      if (!result || result.confidence < 0.6) {
+        useAppStore.getState().addToast({ type: 'warning', message: 'No matching edge found between these cells' })
+        return
+      }
+      // Adjust the non-anchor cell (the one that was right-clicked)
+      pushUndo()
+      const adjustDy = cellCol < neighborCol ? result.dy : -result.dy
+      setCells(prev => prev.map(c =>
+        c.id === cellId ? { ...c, offsetY: c.offsetY + adjustDy } : c,
+      ))
+    } else {
+      // Determine which is top, which is bottom
+      const [topCell, bottomCell] = cellRow < neighborRow ? [cell, neighbor] : [neighbor, cell]
+      result = alignPair(topCell, bottomCell, cellSize, 'vertical')
+      if (!result || result.confidence < 0.6) {
+        useAppStore.getState().addToast({ type: 'warning', message: 'No matching edge found between these cells' })
+        return
+      }
+      pushUndo()
+      const adjustDx = cellRow < neighborRow ? result.dx : -result.dx
+      setCells(prev => prev.map(c =>
+        c.id === cellId ? { ...c, offsetX: c.offsetX + adjustDx } : c,
+      ))
+    }
+
+    useAppStore.getState().addToast({
+      type: 'success',
+      message: `Aligned with ${neighbor.label} (${Math.round(result.confidence * 100)}% confidence)`,
+    })
+  }, [cells, cols, cellSize, pushUndo])
+
   /* ── Multi-select handlers ── */
 
   const toggleMultiSelect = useCallback((cellId: string) => {
@@ -728,7 +835,6 @@ export default function GridStitchMode() {
 
   /* ── Export / Stitch ── */
 
-  const occupiedCells = useMemo(() => cells.filter(c => c.file !== null), [cells])
   const canExport = occupiedCells.length > 0 && !isExporting
 
   const handleExport = useCallback(async () => {
@@ -1003,18 +1109,6 @@ export default function GridStitchMode() {
     }
   }, [canExport, cells, rows, cols, compression, exportGridlines, exportLabels, showGridlines, containerSize, occupiedCells.length, exportPageSize])
 
-  /* ── Cell dimensions for rendering (always square) ── */
-
-  const effectiveGap = showGridlines ? GRIDLINE_WIDTH : 0
-  const outerBorder = showGridlines ? GRIDLINE_WIDTH : 0
-  const totalGridlineW = (cols - 1) * effectiveGap + outerBorder * 2
-  const totalGridlineH = (rows - 1) * effectiveGap + outerBorder * 2
-  const maxCellW = containerSize.width > 0 ? (containerSize.width - totalGridlineW) / cols : 0
-  const maxCellH = containerSize.height > 0 ? (containerSize.height - totalGridlineH) / rows : 0
-  const cellSize = Math.min(maxCellW, maxCellH)
-  const cellWidth = cellSize
-  const cellHeight = cellSize
-
   const hasAnyContent = cells.some(c => c.file !== null)
 
   /* ── Render ── */
@@ -1112,6 +1206,19 @@ export default function GridStitchMode() {
           >
             <Copy size={12} />
             Apply zoom to all
+          </button>
+        )}
+
+        {/* Auto-align */}
+        {occupiedCells.length >= 2 && (
+          <button
+            onClick={handleAutoAlign}
+            disabled={isAligning}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-white/[0.04] text-white/50 hover:text-white hover:bg-white/[0.08] disabled:opacity-25 disabled:pointer-events-none transition-colors"
+            title="Auto-align tiles by detecting matching edge pixels (select anchor cell first)"
+          >
+            <Magnet size={12} />
+            {isAligning ? 'Aligning...' : 'Auto-align'}
           </button>
         )}
 
@@ -1565,6 +1672,49 @@ export default function GridStitchMode() {
                     Reset zoom &amp; position
                   </button>
                 )}
+                {/* Align with neighbor options */}
+                {(() => {
+                  const idx = cells.findIndex(c => c.id === ctxMenu.cellId)
+                  const r = Math.floor(idx / cols)
+                  const c2 = idx % cols
+                  const neighbors: { label: string; id: string; adjacency: 'horizontal' | 'vertical' }[] = []
+                  // Left
+                  if (c2 > 0) {
+                    const n = cells[r * cols + (c2 - 1)]
+                    if (n.file) neighbors.push({ label: `← ${n.label}`, id: n.id, adjacency: 'horizontal' })
+                  }
+                  // Right
+                  if (c2 < cols - 1) {
+                    const n = cells[r * cols + (c2 + 1)]
+                    if (n.file) neighbors.push({ label: `→ ${n.label}`, id: n.id, adjacency: 'horizontal' })
+                  }
+                  // Up
+                  if (r > 0) {
+                    const n = cells[(r - 1) * cols + c2]
+                    if (n.file) neighbors.push({ label: `↑ ${n.label}`, id: n.id, adjacency: 'vertical' })
+                  }
+                  // Down
+                  if (r < rows - 1) {
+                    const n = cells[(r + 1) * cols + c2]
+                    if (n.file) neighbors.push({ label: `↓ ${n.label}`, id: n.id, adjacency: 'vertical' })
+                  }
+                  if (neighbors.length === 0) return null
+                  return (
+                    <>
+                      <div className="h-px bg-white/[0.08] my-1" />
+                      <div className="px-3 py-1 text-[10px] text-white/30 uppercase tracking-wider">Align with</div>
+                      {neighbors.map(nb => (
+                        <button
+                          key={nb.id}
+                          className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.08] transition-colors"
+                          onClick={() => { handleAlignWithNeighbor(ctxMenu.cellId, nb.id, nb.adjacency); setCtxMenu(null) }}
+                        >
+                          {nb.label}
+                        </button>
+                      ))}
+                    </>
+                  )
+                })()}
               </>
             )}
           </div>
