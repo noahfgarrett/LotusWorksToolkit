@@ -30,6 +30,7 @@ interface GridCellProps {
   onFocus: () => void
   onUpdateLabel: (label: string) => void
   onAddFile: () => void
+  onDropFile: (file: File) => void
 }
 
 /* ── Constants ── */
@@ -54,6 +55,7 @@ export const GridCell = memo(function GridCell({
   onFocus,
   onUpdateLabel,
   onAddFile,
+  onDropFile,
 }: GridCellProps) {
   const dragRef = useRef<{
     startX: number
@@ -147,18 +149,49 @@ export const GridCell = memo(function GridCell({
     onSwapStart(cell.id)
   }, [cell.id, onSwapStart])
 
+  const [isDragOver, setIsDragOver] = useState(false)
+
   const handleCellDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
+    // Check if it's a file drop or a cell swap
+    if (e.dataTransfer.types.includes('Files')) {
+      e.dataTransfer.dropEffect = 'copy'
+    } else {
+      e.dataTransfer.dropEffect = 'move'
+    }
+  }, [])
+
+  const handleCellDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragOver(true)
+    }
+  }, [])
+
+  const handleCellDragLeave = useCallback((e: React.DragEvent) => {
+    // Only clear if leaving the cell itself (not entering a child)
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false)
+    }
   }, [])
 
   const handleCellDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
+    setIsDragOver(false)
+
+    // File drop from desktop
+    if (e.dataTransfer.files?.length > 0) {
+      const file = e.dataTransfer.files[0]
+      onDropFile(file)
+      return
+    }
+
+    // Cell swap
     const sourceId = e.dataTransfer.getData('text/plain')
     if (sourceId && sourceId !== cell.id) {
       onSwapDrop(cell.id)
     }
-  }, [cell.id, onSwapDrop])
+  }, [cell.id, onSwapDrop, onDropFile])
 
   /* ── Label editing ── */
 
@@ -198,8 +231,16 @@ export const GridCell = memo(function GridCell({
       onClick={(e) => { e.stopPropagation(); onSelect() }}
       onContextMenu={onContextMenu}
       onDragOver={handleCellDragOver}
+      onDragEnter={handleCellDragEnter}
+      onDragLeave={handleCellDragLeave}
       onDrop={handleCellDrop}
     >
+      {/* File drag-over overlay */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-30 bg-[#F47B20]/15 border-2 border-dashed border-[#F47B20] rounded-sm flex items-center justify-center pointer-events-none">
+          <span className="text-sm font-medium text-[#F47B20]">Drop file here</span>
+        </div>
+      )}
       {/* Content */}
       {hasContent ? (
         <div

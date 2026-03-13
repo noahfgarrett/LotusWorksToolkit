@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type JSX } from 'react'
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
+import { PDFDocument, rgb, StandardFonts, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } from 'pdf-lib'
 import * as pdfjsLib from 'pdfjs-dist'
 import { Button } from '@/components/common/Button.tsx'
 import { ProgressBar } from '@/components/common/ProgressBar.tsx'
@@ -446,6 +446,18 @@ export default function GridStitchMode() {
     input.click()
   }, [processFile])
 
+  const dropFileIntoCell = useCallback(async (cellId: string, file: File) => {
+    if (!isAcceptedFile(file)) {
+      useAppStore.getState().addToast({ type: 'error', message: `Unsupported file type: ${file.name}` })
+      return
+    }
+    const result = await processFile(file)
+    if (!result) return
+    setCells(prev => prev.map(c =>
+      c.id === cellId ? { ...c, ...result, offsetX: 0, offsetY: 0 } : c,
+    ))
+  }, [processFile])
+
   const clearAll = useCallback(() => {
     const hasContent = cells.some(c => c.file !== null)
     if (hasContent && !window.confirm('Clear all cells?')) return
@@ -601,6 +613,17 @@ export default function GridStitchMode() {
           const contentYFromTop = yFromTop + contentCenterY + nativeOffsetY
           const contentY = totalHeight - contentYFromTop - scaledH
 
+          // Clip content to cell boundaries so zoomed/panned content doesn't overflow
+          const clipX = x
+          const clipYFromTop = yFromTop
+          const clipY = totalHeight - clipYFromTop - cellH
+          page.pushOperators(
+            pushGraphicsState(),
+            rectangle(clipX, clipY, cellW, cellH),
+            clip(),
+            endPath(),
+          )
+
           if (cell.type === 'pdf') {
             const pdfBytes = await cell.file.arrayBuffer()
             const srcDoc = await PDFDocument.load(new Uint8Array(pdfBytes))
@@ -649,6 +672,9 @@ export default function GridStitchMode() {
               height: scaledH,
             })
           }
+
+          // Restore graphics state to remove clipping for next cell
+          page.pushOperators(popGraphicsState())
 
           processed++
           setExportProgress(Math.round((processed / totalOccupied) * 100))
@@ -951,6 +977,7 @@ export default function GridStitchMode() {
                 onFocus={() => { setFocusCellId(cell.id); setSelectedCellId(cell.id) }}
                 onUpdateLabel={(label) => handleUpdateLabel(cell.id, label)}
                 onAddFile={() => replaceCell(cell.id)}
+                onDropFile={(file) => dropFileIntoCell(cell.id, file)}
               />
             ))}
             </div>
