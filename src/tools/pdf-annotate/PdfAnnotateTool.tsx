@@ -1551,6 +1551,9 @@ export default function PdfAnnotateTool() {
         return
       }
 
+      // Block all other keybinds while find bar is open (typing in search input)
+      if (findOpen) return
+
       // ── Undo/Redo ──
       if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
       if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); redo(); return }
