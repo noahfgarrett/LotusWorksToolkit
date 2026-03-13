@@ -1408,10 +1408,14 @@ export default function PdfAnnotateTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findIdx, findMatches])
 
-  // Find & Highlight: search text items when query or cache changes
-  useEffect(() => {
-    if (!findQuery.trim()) { setFindMatches([]); setFindIdx(0); return }
-    const q = findCaseSensitive ? findQuery : findQuery.toLowerCase()
+  // Find & Highlight: search text items when committed query or cache changes
+  // Uses a committed query (set on Enter) to avoid running search on every keystroke.
+  const [findCommittedQuery, setFindCommittedQuery] = useState('')
+  const executeFind = useCallback(() => {
+    const raw = findQuery.trim()
+    setFindCommittedQuery(raw)
+    if (!raw) { setFindMatches([]); setFindIdx(0); return }
+    const q = findCaseSensitive ? raw : raw.toLowerCase()
     const matches: { pageNum: number; item: { text: string; x: number; y: number; width: number; height: number; page: number } }[] = []
     for (const [key, items] of Object.entries(textItemsCacheRef.current)) {
       const pageNum = parseInt(key.split('_')[0])
@@ -1422,9 +1426,15 @@ export default function PdfAnnotateTool() {
     }
     matches.sort((a, b) => a.pageNum - b.pageNum || a.item.y - b.item.y)
     setFindMatches(matches)
-    setFindIdx(prev => (prev < matches.length ? prev : 0))
+    setFindIdx(0)
+  }, [findQuery, findCaseSensitive])
+
+  // Re-run search when OCR results arrive or case sensitivity changes — only if we have a committed query
+  useEffect(() => {
+    if (!findCommittedQuery) return
+    executeFind()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [findQuery, findCacheTick, findCaseSensitive])
+  }, [findCacheTick, findCaseSensitive])
 
   // Context menu: close on click outside
   useEffect(() => {
@@ -1517,7 +1527,7 @@ export default function PdfAnnotateTool() {
         // Close context menu
         if (contextMenu) { setContextMenu(null); return }
         // Close find bar
-        if (findOpen) { setFindOpen(false); setFindQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false); return }
+        if (findOpen) { setFindOpen(false); setFindQuery(''); setFindCommittedQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false); return }
         // Clear text selection toolbar
         if (selectTextToolbar) {
           setSelectTextToolbar(null); selectTextStartRef.current = null; selectTextRectsRef.current = []; redrawAll(); return
@@ -1974,14 +1984,17 @@ export default function PdfAnnotateTool() {
         if (findOpen) setFindCacheTick(t => t + 1)
 
         // If page has very little embedded text, queue for OCR fallback
+        // OCR runs when find is open OR when select tool is active (for copy/paste)
+        const needsOcr = findOpen || activeTool === 'select'
         const totalChars = result.items.reduce((sum, it) => sum + it.text.length, 0)
-        if (totalChars < 20 && findOpen && !ocrPagesRef.current.has(cacheKey)) {
+        if (totalChars < 20 && needsOcr && !ocrPagesRef.current.has(cacheKey)) {
           pagesNeedingOcr.push({ pageNum, rotation, cacheKey })
         }
       }).catch(() => {}).finally(() => {
         pending--
         // Once all pdf.js extractions are done, kick off OCR for pages that need it
-        if (pending === 0 && pagesNeedingOcr.length > 0 && findOpen) {
+        const needsOcr = findOpen || activeTool === 'select'
+        if (pending === 0 && pagesNeedingOcr.length > 0 && needsOcr) {
           runOcrFallback(pagesNeedingOcr)
         }
       })
@@ -4358,23 +4371,28 @@ export default function PdfAnnotateTool() {
           <input
             ref={findInputRef}
             type="text"
-            placeholder="Find text..."
+            placeholder="Find text… (Enter to search)"
             value={findQuery}
             onChange={e => setFindQuery(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') {
-                if (findMatches.length === 0) return
-                if (e.shiftKey) setFindIdx(i => (i - 1 + findMatches.length) % findMatches.length)
-                else setFindIdx(i => (i + 1) % findMatches.length)
+                if (findMatches.length > 0 && findCommittedQuery === findQuery.trim()) {
+                  // Already searched — cycle through matches
+                  if (e.shiftKey) setFindIdx(i => (i - 1 + findMatches.length) % findMatches.length)
+                  else setFindIdx(i => (i + 1) % findMatches.length)
+                } else {
+                  // First Enter or query changed — run search
+                  executeFind()
+                }
               }
-              if (e.key === 'Escape') { setFindOpen(false); setFindQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false) }
+              if (e.key === 'Escape') { setFindOpen(false); setFindQuery(''); setFindCommittedQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false) }
             }}
             className="flex-1 bg-transparent text-xs text-white outline-none placeholder:text-white/30"
           />
           {findMatches.length > 0 && (
             <span className="text-xs text-white/40 flex-shrink-0">{findIdx + 1} / {findMatches.length}</span>
           )}
-          {findQuery && findMatches.length === 0 && !ocrScanning && (
+          {findCommittedQuery && findMatches.length === 0 && !ocrScanning && (
             <span className="text-xs text-red-400/70 flex-shrink-0">No matches</span>
           )}
           {ocrScanning && (
@@ -4395,7 +4413,7 @@ export default function PdfAnnotateTool() {
             className="p-0.5 text-white/40 hover:text-white disabled:opacity-30 rounded">
             <ChevronRight size={12} />
           </button>
-          <button onClick={() => { setFindOpen(false); setFindQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false) }} className="p-0.5 text-white/40 hover:text-white rounded">
+          <button onClick={() => { setFindOpen(false); setFindQuery(''); setFindCommittedQuery(''); setFindMatches([]); ocrAbortRef.current?.abort(); setOcrScanning(false) }} className="p-0.5 text-white/40 hover:text-white rounded">
             <X size={12} />
           </button>
         </div>
